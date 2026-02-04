@@ -1,0 +1,918 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LaunchPad - Project Tracker</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        
+        .header {
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .stats-bar {
+            display: flex;
+            gap: 20px;
+            font-size: 0.9rem;
+            color: #888;
+        }
+        
+        .stat {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #60a5fa;
+        }
+        
+        .view {
+            display: none;
+        }
+        
+        .view.active {
+            display: block;
+        }
+        
+        .project-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .project-card {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 24px;
+            cursor: pointer;
+            transition: all 0.2s;
+            position: relative;
+        }
+        
+        .project-card:hover {
+            transform: translateY(-4px);
+            border-color: #60a5fa;
+            box-shadow: 0 8px 16px rgba(96, 165, 250, 0.1);
+        }
+        
+        .project-status {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .status-idea { background: #6b7280; }
+        .status-planning { background: #3b82f6; }
+        .status-building { background: #f59e0b; }
+        .status-launched { background: #10b981; }
+        .status-growing { background: #8b5cf6; }
+        .status-paused { background: #ef4444; }
+        
+        .project-name {
+            font-size: 1.4rem;
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 12px;
+        }
+        
+        .project-description {
+            color: #888;
+            font-size: 0.95rem;
+            margin-bottom: 16px;
+            line-height: 1.5;
+        }
+        
+        .project-meta {
+            display: flex;
+            gap: 16px;
+            font-size: 0.85rem;
+            color: #666;
+        }
+        
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: all 0.2s;
+            font-weight: 500;
+        }
+        
+        .btn-primary {
+            background: #60a5fa;
+            color: #fff;
+        }
+        
+        .btn-primary:hover {
+            background: #3b82f6;
+        }
+        
+        .btn-secondary {
+            background: #2a2a2a;
+            color: #e0e0e0;
+            border: 1px solid #444;
+        }
+        
+        .btn-secondary:hover {
+            background: #3a3a3a;
+        }
+        
+        .form-container {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 32px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            color: #e0e0e0;
+            font-weight: 500;
+        }
+        
+        .form-input, .form-textarea, .form-select {
+            width: 100%;
+            padding: 12px;
+            background: #0f0f0f;
+            border: 1px solid #333;
+            border-radius: 8px;
+            color: #e0e0e0;
+            font-size: 1rem;
+            font-family: inherit;
+        }
+        
+        .form-input:focus, .form-textarea:focus, .form-select:focus {
+            outline: none;
+            border-color: #60a5fa;
+        }
+        
+        .form-textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+        
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+        
+        .form-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 24px;
+        }
+        
+        .project-detail {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .detail-header {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 32px;
+            margin-bottom: 24px;
+        }
+        
+        .detail-title {
+            font-size: 2rem;
+            color: #fff;
+            margin-bottom: 16px;
+        }
+        
+        .detail-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 24px;
+        }
+        
+        .detail-section {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 24px;
+        }
+        
+        .section-title {
+            font-size: 1.3rem;
+            color: #fff;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #333;
+        }
+        
+        .update-item {
+            padding: 16px;
+            background: #0f0f0f;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            border-left: 3px solid #60a5fa;
+        }
+        
+        .update-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        
+        .update-title {
+            font-weight: 600;
+            color: #fff;
+        }
+        
+        .update-time {
+            color: #666;
+            font-size: 0.85rem;
+        }
+        
+        .update-content {
+            color: #888;
+            font-size: 0.95rem;
+        }
+        
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px 0;
+            border-bottom: 1px solid #222;
+        }
+        
+        .info-label {
+            color: #888;
+        }
+        
+        .info-value {
+            color: #e0e0e0;
+            font-weight: 500;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        
+        .back-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            color: #60a5fa;
+            cursor: pointer;
+            margin-bottom: 20px;
+            font-size: 0.95rem;
+        }
+        
+        .back-btn:hover {
+            color: #3b82f6;
+        }
+        
+        @media (max-width: 768px) {
+            .project-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .form-row, .detail-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            h1 {
+                font-size: 1.8rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>🚀 LaunchPad</h1>
+            <div style="color: #888; margin-top: 8px;">Entrepreneur's Project Tracker</div>
+        </div>
+        <div class="stats-bar" id="statsBar">
+            <div class="stat">
+                <div class="stat-value">-</div>
+                <div>Total</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value">-</div>
+                <div>Building</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value">-</div>
+                <div>Launched</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Projects List View -->
+    <div id="projectsView" class="view active">
+        <div style="margin-bottom: 24px; display: flex; gap: 12px;">
+            <button class="btn btn-primary" onclick="showAddProject()">+ New Project</button>
+            <button class="btn btn-secondary" onclick="showGitHubImport()">📥 Import from GitHub</button>
+        </div>
+        <div id="projectsList" class="project-grid"></div>
+    </div>
+
+    <!-- Add/Edit Project View -->
+    <div id="formView" class="view">
+        <div class="back-btn" onclick="showProjects()">← Back to Projects</div>
+        <div class="form-container">
+            <h2 id="formTitle" style="margin-bottom: 24px; color: #fff;">New Project</h2>
+            <form id="projectForm" onsubmit="saveProject(event)">
+                <div class="form-group">
+                    <label class="form-label">Project Name *</label>
+                    <input type="text" name="name" class="form-input" required>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Description</label>
+                    <textarea name="description" class="form-textarea" rows="3"></textarea>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Status</label>
+                        <select name="status" class="form-select">
+                            <option value="idea">💡 Idea</option>
+                            <option value="planning">📋 Planning</option>
+                            <option value="building">🔨 Building</option>
+                            <option value="launched">🚀 Launched</option>
+                            <option value="growing">📈 Growing</option>
+                            <option value="paused">⏸️ Paused</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Category</label>
+                        <select name="category" class="form-select">
+                            <option value="app">📱 App</option>
+                            <option value="saas">☁️ SaaS</option>
+                            <option value="utility">🔧 Utility</option>
+                            <option value="tool">🛠️ Tool</option>
+                            <option value="service">💼 Service</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Tech Stack</label>
+                    <input type="text" name="tech_stack" class="form-input" placeholder="e.g., Next.js, TypeScript, Supabase">
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Target Market</label>
+                    <input type="text" name="target_market" class="form-input" placeholder="e.g., Developers, Small businesses">
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Monetization</label>
+                        <input type="text" name="monetization" class="form-input" placeholder="e.g., Subscription, One-time">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Pricing</label>
+                        <input type="text" name="pricing" class="form-input" placeholder="e.g., $29/mo, $99 one-time">
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Repository URL</label>
+                        <input type="url" name="repo_url" class="form-input" placeholder="https://github.com/...">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Live URL</label>
+                        <input type="url" name="live_url" class="form-input" placeholder="https://...">
+                    </div>
+                </div>
+                
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Save Project</button>
+                    <button type="button" class="btn btn-secondary" onclick="showProjects()">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- GitHub Import View -->
+    <div id="githubView" class="view">
+        <div class="back-btn" onclick="showProjects()">← Back to Projects</div>
+        <div class="form-container">
+            <h2 style="margin-bottom: 24px; color: #fff;">Import from GitHub</h2>
+            
+            <div id="githubTokenForm">
+                <p style="color: #888; margin-bottom: 16px;">
+                    Enter your GitHub Personal Access Token to import your repositories.
+                    <a href="https://github.com/settings/tokens/new" target="_blank" style="color: #60a5fa;">Create one here</a>
+                    (needs 'repo' scope).
+                </p>
+                <div class="form-group">
+                    <label class="form-label">GitHub Personal Access Token</label>
+                    <input type="password" id="githubToken" class="form-input" placeholder="ghp_...">
+                </div>
+                <button class="btn btn-primary" onclick="loadGitHubRepos()">Load Repositories</button>
+            </div>
+            
+            <div id="githubReposList" style="display: none; margin-top: 32px;">
+                <h3 style="color: #fff; margin-bottom: 16px;">Select repositories to import:</h3>
+                <div id="repoCheckboxes" style="max-height: 400px; overflow-y: auto;"></div>
+                <div style="margin-top: 24px; display: flex; gap: 12px;">
+                    <button class="btn btn-primary" onclick="importSelected()">Import Selected</button>
+                    <button class="btn btn-secondary" onclick="selectAllRepos()">Select All</button>
+                    <button class="btn btn-secondary" onclick="deselectAllRepos()">Deselect All</button>
+                </div>
+            </div>
+            
+            <div id="githubLoading" style="display: none; text-align: center; padding: 40px; color: #888;">
+                Loading repositories...
+            </div>
+        </div>
+    </div>
+
+    <!-- Project Detail View -->
+    <div id="detailView" class="view">
+        <div class="back-btn" onclick="showProjects()">← Back to Projects</div>
+        <div class="project-detail">
+            <div class="detail-header">
+                <div class="detail-title" id="detailTitle"></div>
+                <div id="detailDescription" style="color: #888; margin-bottom: 16px;"></div>
+                <div style="display: flex; gap: 12px;">
+                    <button class="btn btn-secondary" onclick="editCurrentProject()">Edit</button>
+                    <button class="btn btn-secondary" onclick="deleteCurrentProject()">Delete</button>
+                </div>
+            </div>
+            
+            <div class="detail-grid">
+                <div>
+                    <div class="detail-section">
+                        <div class="section-title">📝 Build Log</div>
+                        <div id="updatesList"></div>
+                        <div style="margin-top: 16px;">
+                            <button class="btn btn-primary" onclick="showAddUpdate()">+ Add Update</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div>
+                    <div class="detail-section">
+                        <div class="section-title">ℹ️ Info</div>
+                        <div id="projectInfo"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let projects = [];
+        let currentProject = null;
+        let editingProjectId = null;
+        let githubRepos = [];
+
+        // Load projects
+        async function loadProjects() {
+            try {
+                const response = await fetch('/api/projects');
+                projects = await response.json();
+                renderProjects();
+            } catch (error) {
+                console.error('Error loading projects:', error);
+            }
+        }
+
+        // Load stats
+        async function loadStats() {
+            try {
+                const response = await fetch('/api/stats');
+                const stats = await response.json();
+                
+                document.getElementById('statsBar').innerHTML = `
+                    <div class="stat">
+                        <div class="stat-value">${stats.total}</div>
+                        <div>Total</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value">${stats.inProgress}</div>
+                        <div>Building</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value">${stats.launched}</div>
+                        <div>Launched</div>
+                    </div>
+                `;
+            } catch (error) {
+                console.error('Error loading stats:', error);
+            }
+        }
+
+        // Render projects
+        function renderProjects() {
+            const container = document.getElementById('projectsList');
+            
+            if (projects.length === 0) {
+                container.innerHTML = '<div class="empty-state">No projects yet. Create your first one!</div>';
+                return;
+            }
+            
+            container.innerHTML = projects.map(p => `
+                <div class="project-card" onclick="showProject(${p.id})">
+                    <div class="project-status status-${p.status}">${p.status}</div>
+                    <div class="project-name">${p.name}</div>
+                    <div class="project-description">${p.description || 'No description'}</div>
+                    <div class="project-meta">
+                        <span>${getCategoryIcon(p.category)} ${p.category}</span>
+                        ${p.tech_stack ? `<span>🔧 ${p.tech_stack.split(',')[0].trim()}</span>` : ''}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Show views
+        function showView(viewId) {
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            document.getElementById(viewId).classList.add('active');
+        }
+
+        function showProjects() {
+            showView('projectsView');
+            loadProjects();
+            loadStats();
+        }
+
+        function showAddProject() {
+            editingProjectId = null;
+            document.getElementById('formTitle').textContent = 'New Project';
+            document.getElementById('projectForm').reset();
+            showView('formView');
+        }
+
+        // Save project
+        async function saveProject(event) {
+            event.preventDefault();
+            const form = event.target;
+            const formData = new FormData(form);
+            
+            const data = {};
+            formData.forEach((value, key) => {
+                data[key] = value;
+            });
+            
+            try {
+                const url = editingProjectId ? `/api/projects/${editingProjectId}` : '/api/projects';
+                const method = editingProjectId ? 'PATCH' : 'POST';
+                
+                await fetch(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                
+                showProjects();
+            } catch (error) {
+                console.error('Error saving project:', error);
+                alert('Error saving project');
+            }
+        }
+
+        // Show project detail
+        async function showProject(id) {
+            try {
+                const response = await fetch(`/api/projects/${id}`);
+                currentProject = await response.json();
+                
+                document.getElementById('detailTitle').textContent = currentProject.name;
+                document.getElementById('detailDescription').textContent = currentProject.description || '';
+                
+                // Render updates
+                const updatesList = document.getElementById('updatesList');
+                if (currentProject.updates.length === 0) {
+                    updatesList.innerHTML = '<div class="empty-state">No updates yet</div>';
+                } else {
+                    updatesList.innerHTML = currentProject.updates.map(u => `
+                        <div class="update-item">
+                            <div class="update-header">
+                                <div class="update-title">${u.title}</div>
+                                <div class="update-time">${formatDate(u.created_at)}</div>
+                            </div>
+                            ${u.content ? `<div class="update-content">${u.content}</div>` : ''}
+                        </div>
+                    `).join('');
+                }
+                
+                // Render info
+                document.getElementById('projectInfo').innerHTML = `
+                    <div class="info-row">
+                        <div class="info-label">Status</div>
+                        <div class="info-value">${currentProject.status}</div>
+                    </div>
+                    <div class="info-row">
+                        <div class="info-label">Category</div>
+                        <div class="info-value">${currentProject.category}</div>
+                    </div>
+                    ${currentProject.tech_stack ? `
+                        <div class="info-row">
+                            <div class="info-label">Tech Stack</div>
+                            <div class="info-value">${currentProject.tech_stack}</div>
+                        </div>
+                    ` : ''}
+                    ${currentProject.target_market ? `
+                        <div class="info-row">
+                            <div class="info-label">Target Market</div>
+                            <div class="info-value">${currentProject.target_market}</div>
+                        </div>
+                    ` : ''}
+                    ${currentProject.monetization ? `
+                        <div class="info-row">
+                            <div class="info-label">Monetization</div>
+                            <div class="info-value">${currentProject.monetization}</div>
+                        </div>
+                    ` : ''}
+                    ${currentProject.pricing ? `
+                        <div class="info-row">
+                            <div class="info-label">Pricing</div>
+                            <div class="info-value">${currentProject.pricing}</div>
+                        </div>
+                    ` : ''}
+                    ${currentProject.repo_url ? `
+                        <div class="info-row">
+                            <div class="info-label">Repository</div>
+                            <div class="info-value"><a href="${currentProject.repo_url}" target="_blank" style="color: #60a5fa;">View</a></div>
+                        </div>
+                    ` : ''}
+                    ${currentProject.live_url ? `
+                        <div class="info-row">
+                            <div class="info-label">Live Site</div>
+                            <div class="info-value"><a href="${currentProject.live_url}" target="_blank" style="color: #60a5fa;">Visit</a></div>
+                        </div>
+                    ` : ''}
+                `;
+                
+                showView('detailView');
+            } catch (error) {
+                console.error('Error loading project:', error);
+            }
+        }
+
+        function editCurrentProject() {
+            if (!currentProject) return;
+            
+            editingProjectId = currentProject.id;
+            document.getElementById('formTitle').textContent = 'Edit Project';
+            
+            const form = document.getElementById('projectForm');
+            form.name.value = currentProject.name;
+            form.description.value = currentProject.description || '';
+            form.status.value = currentProject.status;
+            form.category.value = currentProject.category;
+            form.tech_stack.value = currentProject.tech_stack || '';
+            form.target_market.value = currentProject.target_market || '';
+            form.monetization.value = currentProject.monetization || '';
+            form.pricing.value = currentProject.pricing || '';
+            form.repo_url.value = currentProject.repo_url || '';
+            form.live_url.value = currentProject.live_url || '';
+            
+            showView('formView');
+        }
+
+        async function deleteCurrentProject() {
+            if (!currentProject) return;
+            if (!confirm(`Delete "${currentProject.name}"?`)) return;
+            
+            try {
+                await fetch(`/api/projects/${currentProject.id}`, { method: 'DELETE' });
+                showProjects();
+            } catch (error) {
+                console.error('Error deleting project:', error);
+            }
+        }
+
+        function showAddUpdate() {
+            const title = prompt('Update title:');
+            if (!title) return;
+            
+            const content = prompt('Update details (optional):');
+            
+            addUpdate(title, content);
+        }
+
+        async function addUpdate(title, content) {
+            if (!currentProject) return;
+            
+            try {
+                await fetch(`/api/projects/${currentProject.id}/updates`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title, content, type: 'progress' })
+                });
+                
+                showProject(currentProject.id);
+            } catch (error) {
+                console.error('Error adding update:', error);
+            }
+        }
+
+        // Utilities
+        function getCategoryIcon(category) {
+            const icons = {
+                app: '📱',
+                saas: '☁️',
+                utility: '🔧',
+                tool: '🛠️',
+                service: '💼'
+            };
+            return icons[category] || '📦';
+        }
+
+        function formatDate(timestamp) {
+            const date = new Date(timestamp * 1000);
+            const now = new Date();
+            const diff = Math.floor((now - date) / 1000);
+            
+            if (diff < 60) return 'just now';
+            if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+            if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+            if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
+            
+            return date.toLocaleDateString();
+        }
+
+        // ========== GITHUB IMPORT ==========
+        
+        function showGitHubImport() {
+            showView('githubView');
+            document.getElementById('githubTokenForm').style.display = 'block';
+            document.getElementById('githubReposList').style.display = 'none';
+            document.getElementById('githubLoading').style.display = 'none';
+        }
+        
+        async function loadGitHubRepos() {
+            const token = document.getElementById('githubToken').value.trim();
+            if (!token) {
+                alert('Please enter a GitHub token');
+                return;
+            }
+            
+            document.getElementById('githubTokenForm').style.display = 'none';
+            document.getElementById('githubLoading').style.display = 'block';
+            
+            try {
+                // Set token
+                await fetch('/api/github/token', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token })
+                });
+                
+                // Fetch repos
+                const response = await fetch('/api/github/repos');
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to load repos');
+                }
+                
+                githubRepos = data.repos;
+                renderGitHubRepos();
+                
+                document.getElementById('githubLoading').style.display = 'none';
+                document.getElementById('githubReposList').style.display = 'block';
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+                document.getElementById('githubLoading').style.display = 'none';
+                document.getElementById('githubTokenForm').style.display = 'block';
+            }
+        }
+        
+        function renderGitHubRepos() {
+            const container = document.getElementById('repoCheckboxes');
+            
+            container.innerHTML = githubRepos.map((repo, index) => {
+                const statusBadge = `<span class="project-status status-${repo.inferredStatus}">${repo.inferredStatus}</span>`;
+                const lastCommit = repo.lastCommit 
+                    ? `Last commit: ${new Date(repo.lastCommit).toLocaleDateString()}` 
+                    : 'No commits';
+                
+                return `
+                    <div style="padding: 16px; background: #0f0f0f; border-radius: 8px; margin-bottom: 12px; border: 1px solid #333;">
+                        <label style="display: flex; align-items: start; gap: 12px; cursor: pointer;">
+                            <input type="checkbox" data-repo-index="${index}" style="margin-top: 4px;">
+                            <div style="flex: 1;">
+                                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 4px;">
+                                    <strong style="color: #fff;">${repo.name}</strong>
+                                    ${statusBadge}
+                                </div>
+                                <div style="color: #888; font-size: 0.9rem; margin-bottom: 4px;">
+                                    ${repo.description || 'No description'}
+                                </div>
+                                <div style="color: #666; font-size: 0.85rem;">
+                                    ${repo.language || 'Unknown'} · ${lastCommit}
+                                    ${repo.homepage ? ` · <a href="${repo.homepage}" target="_blank" style="color: #60a5fa;">Live site</a>` : ''}
+                                </div>
+                            </div>
+                        </label>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        function selectAllRepos() {
+            document.querySelectorAll('#repoCheckboxes input[type="checkbox"]').forEach(cb => {
+                cb.checked = true;
+            });
+        }
+        
+        function deselectAllRepos() {
+            document.querySelectorAll('#repoCheckboxes input[type="checkbox"]').forEach(cb => {
+                cb.checked = false;
+            });
+        }
+        
+        async function importSelected() {
+            const checkboxes = document.querySelectorAll('#repoCheckboxes input[type="checkbox"]:checked');
+            if (checkboxes.length === 0) {
+                alert('Please select at least one repository');
+                return;
+            }
+            
+            const selectedRepos = Array.from(checkboxes).map(cb => {
+                const index = parseInt(cb.dataset.repoIndex);
+                return githubRepos[index];
+            });
+            
+            if (!confirm(`Import ${selectedRepos.length} repositories?`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/github/import', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ repos: selectedRepos })
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to import');
+                }
+                
+                alert(`Successfully imported ${data.imported} projects!`);
+                showProjects();
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            }
+        }
+
+        // Initialize
+        loadProjects();
+        loadStats();
+    </script>
+</body>
+</html>

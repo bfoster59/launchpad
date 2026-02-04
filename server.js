@@ -1,0 +1,594 @@
+const express = require('express');
+const { Octokit } = require('@octokit/rest');
+const LaunchpadDB = require('./database');
+
+const app = express();
+const PORT = 3020;
+const HOST = '0.0.0.0';
+
+// Initialize database
+const db = new LaunchpadDB();
+
+// GitHub client (will use env var or user-provided token)
+let octokit = null;
+
+// Middleware
+app.use(express.static('public'));
+app.use(express.json({ limit: '10mb' })); // Increase limit for bulk imports
+
+// ========== PROJECT ENDPOINTS ==========
+
+// Get all projects
+app.get('/api/projects', (req, res) => {
+    try {
+        const filters = {};
+        if (req.query.status) filters.status = req.query.status;
+        if (req.query.category) filters.category = req.query.category;
+        
+        const projects = db.getAllProjects(filters);
+        res.json(projects);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get a single project with updates and metrics
+app.get('/api/projects/:id', (req, res) => {
+    try {
+        const project = db.getProject(parseInt(req.params.id));
+        if (!project) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+        
+        const updates = db.getProjectUpdates(project.id);
+        const metrics = db.getProjectMetrics(project.id);
+        
+        res.json({
+            ...project,
+            updates,
+            metrics
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Create project
+app.post('/api/projects', (req, res) => {
+    try {
+        const project = db.addProject(req.body);
+        res.json(project);
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+// Update project
+app.patch('/api/projects/:id', (req, res) => {
+    try {
+        const project = db.updateProject(parseInt(req.params.id), req.body);
+        if (!project) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+        res.json(project);
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+// Delete project
+app.delete('/api/projects/:id', (req, res) => {
+    try {
+        const deleted = db.deleteProject(parseInt(req.params.id));
+        if (!deleted) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+        res.json({ success: true });
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+// Get project stats
+app.get('/api/stats', (req, res) => {
+    try {
+        const stats = db.getStats();
+        const projects = db.getAllProjects();
+        const total = projects.length;
+        const launched = projects.filter(p => p.status === 'launched' || p.status === 'growing').length;
+        
+        res.json({
+            ...stats,
+            total,
+            launched,
+            inProgress: stats.building + stats.planning
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ========== UPDATE ENDPOINTS ==========
+
+// Add update to project
+app.post('/api/projects/:id/updates', (req, res) => {
+    try {
+        const update = db.addUpdate({
+            project_id: parseInt(req.params.id),
+            ...req.body
+        });
+        res.json(update);
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+// Get project updates
+app.get('/api/projects/:id/updates', (req, res) => {
+    try {
+        const updates = db.getProjectUpdates(parseInt(req.params.id));
+        res.json(updates);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Delete update
+app.delete('/api/updates/:id', (req, res) => {
+    try {
+        const deleted = db.deleteUpdate(parseInt(req.params.id));
+        if (!deleted) {
+            return res.status(404).json({ error: 'Update not found' });
+        }
+        res.json({ success: true });
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+// ========== METRIC ENDPOINTS ==========
+
+// Add metric
+app.post('/api/projects/:id/metrics', (req, res) => {
+    try {
+        const metric = db.addMetric({
+            project_id: parseInt(req.params.id),
+            ...req.body
+        });
+        res.json(metric);
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+// Get project metrics
+app.get('/api/projects/:id/metrics', (req, res) => {
+    try {
+        const metrics = db.getProjectMetrics(
+            parseInt(req.params.id),
+            req.query.metric_name
+        );
+        res.json(metrics);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ========== GITHUB ENDPOINTS ==========
+
+// Search GitHub repos
+app.get('/api/github/search', async (req, res) => {
+    try {
+        const { q, per_page = 10 } = req.query;
+        if (!q) {
+            return res.status(400).json({ error: 'Query required' });
+        }
+        
+        const publicOctokit = new Octokit();
+        const { data } = await publicOctokit.search.repos({
+            q,
+            sort: 'stars',
+            order: 'desc',
+            per_page: parseInt(per_page)
+        });
+        
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get trending repos
+app.get('/api/github/trending', async (req, res) => {
+    try {
+        const { language = '', since = 'monthly' } = req.query;
+        
+        // Calculate date range
+        const now = new Date();
+        let dateFilter;
+        if (since === 'daily') {
+            dateFilter = new Date(now - 24 * 60 * 60 * 1000);
+        } else if (since === 'weekly') {
+            dateFilter = new Date(now - 7 * 24 * 60 * 60 * 1000);
+        } else {
+            dateFilter = new Date(now - 30 * 24 * 60 * 60 * 1000);
+        }
+        
+        const dateStr = dateFilter.toISOString().split('T')[0];
+        
+        let query = `created:>${dateStr}`;
+        if (language) {
+            query += ` language:${language}`;
+        }
+        
+        const publicOctokit = new Octokit();
+        const { data } = await publicOctokit.search.repos({
+            q: query,
+            sort: 'stars',
+            order: 'desc',
+            per_page: 10
+        });
+        
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Check GitHub sync status
+app.get('/api/projects/:id/sync-status', async (req, res) => {
+    try {
+        const { exec } = require('child_process');
+        const util = require('util');
+        const execPromise = util.promisify(exec);
+        const fs = require('fs');
+        
+        const project = db.getProject(parseInt(req.params.id));
+        if (!project) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+        
+        if (!project.repo_url) {
+            return res.json({ status: 'no_repo', message: 'No GitHub repository linked' });
+        }
+        
+        if (!project.local_path || !fs.existsSync(project.local_path)) {
+            return res.json({ status: 'not_cloned', message: 'Repository not cloned locally' });
+        }
+        
+        // Check git status
+        try {
+            // Fetch latest from remote
+            await execPromise(`cd "${project.local_path}" && git fetch origin 2>&1`);
+            
+            // Check for uncommitted changes
+            const { stdout: statusOut } = await execPromise(`cd "${project.local_path}" && git status --porcelain`);
+            const hasUncommitted = statusOut.trim().length > 0;
+            
+            // Check for unpushed commits
+            const { stdout: unpushedOut } = await execPromise(`cd "${project.local_path}" && git log origin/$(git rev-parse --abbrev-ref HEAD)..HEAD --oneline 2>&1 || echo ""`);
+            const hasUnpushed = unpushedOut.trim().length > 0 && !unpushedOut.includes('fatal');
+            
+            // Check if behind remote
+            const { stdout: behindOut } = await execPromise(`cd "${project.local_path}" && git log HEAD..origin/$(git rev-parse --abbrev-ref HEAD) --oneline 2>&1 || echo ""`);
+            const isBehind = behindOut.trim().length > 0 && !behindOut.includes('fatal');
+            
+            // Get current branch
+            const { stdout: branchOut } = await execPromise(`cd "${project.local_path}" && git rev-parse --abbrev-ref HEAD`);
+            const currentBranch = branchOut.trim();
+            
+            // Get last commit info
+            const { stdout: lastCommitOut } = await execPromise(`cd "${project.local_path}" && git log -1 --format="%h|%s|%ar"`);
+            const [hash, message, timeAgo] = lastCommitOut.trim().split('|');
+            
+            let status = 'synced';
+            let messages = [];
+            
+            if (hasUncommitted) {
+                status = 'dirty';
+                messages.push('Uncommitted changes');
+            }
+            if (hasUnpushed) {
+                status = 'unpushed';
+                messages.push('Unpushed commits');
+            }
+            if (isBehind) {
+                status = 'behind';
+                messages.push('Behind remote - pull needed');
+            }
+            
+            if (status === 'synced') {
+                messages.push('Up to date with remote');
+            }
+            
+            res.json({
+                status,
+                messages,
+                details: {
+                    branch: currentBranch,
+                    lastCommit: {
+                        hash,
+                        message,
+                        timeAgo
+                    },
+                    hasUncommitted,
+                    hasUnpushed,
+                    isBehind
+                }
+            });
+        } catch (gitError) {
+            res.json({ 
+                status: 'error', 
+                message: 'Git error: ' + gitError.message,
+                details: { error: gitError.message }
+            });
+        }
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Clone repo to local
+app.post('/api/projects/:id/clone', async (req, res) => {
+    try {
+        const { exec } = require('child_process');
+        const util = require('util');
+        const execPromise = util.promisify(exec);
+        const path = require('path');
+        
+        const project = db.getProject(parseInt(req.params.id));
+        if (!project) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+        
+        if (!project.repo_url) {
+            return res.status(400).json({ error: 'Project has no repository URL' });
+        }
+        
+        // Determine target directory - all projects go to /home/bfoster/projects/
+        const baseDir = '/home/bfoster/projects';
+        const targetDir = path.join(baseDir, project.name);
+        
+        // Check if already cloned
+        const fs = require('fs');
+        if (fs.existsSync(targetDir)) {
+            return res.status(409).json({ error: 'Already cloned', local_path: targetDir });
+        }
+        
+        // Clone the repo
+        const repoDir = path.dirname(targetDir);
+        await execPromise(`mkdir -p "${repoDir}"`);
+        await execPromise(`git clone "${project.repo_url}" "${targetDir}"`);
+        
+        // Update project with local path
+        const updated = db.updateProject(project.id, { local_path: targetDir });
+        
+        // Add update
+        db.addUpdate({
+            project_id: project.id,
+            type: 'progress',
+            title: 'Cloned to local',
+            content: `Repository cloned to ${targetDir}`
+        });
+        
+        res.json({ success: true, local_path: targetDir, project: updated });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+
+
+// Set GitHub token
+app.post('/api/github/token', (req, res) => {
+    try {
+        const { token } = req.body;
+        if (!token) {
+            return res.status(400).json({ error: 'Token required' });
+        }
+        
+        octokit = new Octokit({ auth: token });
+        res.json({ success: true });
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+// Get user's GitHub repos
+app.get('/api/github/repos', async (req, res) => {
+    try {
+        if (!octokit) {
+            return res.status(401).json({ error: 'GitHub token not set' });
+        }
+        
+        const { data: user } = await octokit.users.getAuthenticated();
+        const { data: repos } = await octokit.repos.listForAuthenticatedUser({
+            sort: 'updated',
+            per_page: 100
+        });
+        
+        // Enrich repos with commit activity
+        const enrichedRepos = await Promise.all(
+            repos.map(async (repo) => {
+                try {
+                    // Get latest commit date
+                    const { data: commits } = await octokit.repos.listCommits({
+                        owner: repo.owner.login,
+                        repo: repo.name,
+                        per_page: 1
+                    });
+                    
+                    const lastCommit = commits[0]?.commit?.author?.date;
+                    const daysSinceCommit = lastCommit 
+                        ? Math.floor((Date.now() - new Date(lastCommit)) / (1000 * 60 * 60 * 24))
+                        : null;
+                    
+                    // Infer status
+                    let status = 'idea';
+                    if (repo.homepage) {
+                        status = 'launched';
+                    } else if (daysSinceCommit !== null) {
+                        if (daysSinceCommit < 7) status = 'building';
+                        else if (daysSinceCommit < 90) status = 'paused';
+                    }
+                    
+                    return {
+                        ...repo,
+                        lastCommit,
+                        daysSinceCommit,
+                        inferredStatus: status
+                    };
+                } catch (error) {
+                    return {
+                        ...repo,
+                        lastCommit: null,
+                        daysSinceCommit: null,
+                        inferredStatus: 'idea'
+                    };
+                }
+            })
+        );
+        
+        res.json({
+            user: user.login,
+            repos: enrichedRepos
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Import a single repo by URL (public repos, no auth needed)
+app.post('/api/github/import-url', async (req, res) => {
+    try {
+        const { url } = req.body;
+        if (!url) {
+            return res.status(400).json({ error: 'URL required' });
+        }
+        
+        // Parse GitHub URL
+        const match = url.match(/github\.com\/([^\/]+)\/([^\/]+)/);
+        if (!match) {
+            return res.status(400).json({ error: 'Invalid GitHub URL' });
+        }
+        
+        const [, owner, repo] = match;
+        const repoName = repo.replace(/\.git$/, '');
+        
+        // Fetch repo info from public API (using octokit without auth)
+        const publicOctokit = new Octokit();
+        const { data: repoData } = await publicOctokit.repos.get({
+            owner,
+            repo: repoName
+        });
+        
+        // Check if already exists
+        const existing = db.getAllProjects().find(p => p.repo_url === repoData.html_url);
+        if (existing) {
+            return res.status(409).json({ error: 'Repository already imported', project: existing });
+        }
+        
+        // Fetch README
+        let readme = null;
+        try {
+            const { data: readmeData } = await publicOctokit.repos.getReadme({
+                owner,
+                repo: repoName
+            });
+            readme = Buffer.from(readmeData.content, 'base64').toString('utf-8');
+        } catch (error) {
+            console.log('No README found for', repoName);
+        }
+        
+        // Create project
+        const project = db.addProject({
+            name: repoData.name,
+            description: repoData.description || `GitHub repository: ${repoData.name}`,
+            status: repoData.homepage ? 'launched' : 'building',
+            category: 'app',
+            tech_stack: repoData.language,
+            repo_url: repoData.html_url,
+            live_url: repoData.homepage || null,
+            source: 'github',
+            readme
+        });
+        
+        // Add initial update
+        db.addUpdate({
+            project_id: project.id,
+            type: 'progress',
+            title: 'Imported from GitHub',
+            content: `Imported from ${repoData.html_url}`
+        });
+        
+        res.json({ success: true, project });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Import selected repos as projects
+app.post('/api/github/import', async (req, res) => {
+    try {
+        const { repos } = req.body;
+        if (!Array.isArray(repos)) {
+            return res.status(400).json({ error: 'repos must be an array' });
+        }
+        
+        const imported = [];
+        
+        for (const repoData of repos) {
+            // Check if project already exists by repo_url
+            const existing = db.getAllProjects().find(p => p.repo_url === repoData.html_url);
+            if (existing) {
+                console.log(`Skipping ${repoData.name} - already imported`);
+                continue;
+            }
+            
+            const project = db.addProject({
+                name: repoData.name,
+                description: repoData.description || `GitHub repository: ${repoData.name}`,
+                status: repoData.inferredStatus || 'idea',
+                category: 'app',
+                tech_stack: repoData.language,
+                repo_url: repoData.html_url,
+                live_url: repoData.homepage || null,
+                source: 'github'
+            });
+            
+            // Add initial update
+            if (repoData.lastCommit) {
+                db.addUpdate({
+                    project_id: project.id,
+                    type: 'progress',
+                    title: 'Imported from GitHub',
+                    content: `Last commit: ${new Date(repoData.lastCommit).toLocaleDateString()}`
+                });
+            }
+            
+            imported.push(project);
+        }
+        
+        res.json({
+            imported: imported.length,
+            projects: imported
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Start server
+app.listen(PORT, HOST, () => {
+    console.log(`\n🚀 LaunchPad - Entrepreneur's Project Tracker`);
+    console.log(`   Local:   http://localhost:${PORT}`);
+    console.log(`   Network: http://192.168.5.102:${PORT}`);
+    console.log(`\n📊 Ready to track your empire\n`);
+});
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+    console.log('\n\n👋 Shutting down...');
+    db.close();
+    process.exit(0);
+});

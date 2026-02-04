@@ -1,0 +1,671 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background: #0a0a0a;
+    color: #e0e0e0;
+    padding: 20px;
+    line-height: 1.6;
+}
+
+/* Header */
+.header {
+    margin-bottom: 24px;
+    padding-bottom: 20px;
+    border-bottom: 2px solid #333;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+h1 {
+    font-size: 2.5rem;
+    background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.subtitle {
+    color: #888;
+    margin-top: 8px;
+}
+
+.stats-bar {
+    display: flex;
+    gap: 24px;
+}
+
+.stat {
+    text-align: center;
+}
+
+.stat-value {
+    font-size: 2rem;
+    font-weight: bold;
+    color: #60a5fa;
+}
+
+/* Navigation */
+.main-nav {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 32px;
+    border-bottom: 2px solid #333;
+}
+
+.nav-tab {
+    padding: 12px 24px;
+    background: transparent;
+    border: none;
+    color: #888;
+    cursor: pointer;
+    font-size: 1rem;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+}
+
+.nav-tab:hover {
+    color: #fff;
+}
+
+.nav-tab.active {
+    color: #60a5fa;
+    border-bottom-color: #60a5fa;
+}
+
+/* Views */
+.view {
+    display: none;
+}
+
+.view.active {
+    display: block;
+}
+
+/* Sections */
+.section {
+    margin-bottom: 40px;
+}
+
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+h2, h3 {
+    color: #fff;
+}
+
+/* Project Grid */
+.project-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 20px;
+}
+
+.project-card {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 12px;
+    padding: 20px;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+}
+
+.project-card:hover {
+    transform: translateY(-4px);
+    border-color: #60a5fa;
+    box-shadow: 0 8px 16px rgba(96, 165, 250, 0.1);
+}
+
+.project-status {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    pointer-events: none; /* Don't block clicks */
+}
+
+.status-idea { background: #6b7280; }
+.status-planning { background: #3b82f6; }
+.status-building { background: #f59e0b; }
+.status-launched { background: #10b981; }
+.status-growing { background: #8b5cf6; }
+.status-paused { background: #ef4444; }
+
+.project-name {
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 8px;
+}
+
+.project-description {
+    color: #888;
+    font-size: 0.9rem;
+    margin-bottom: 12px;
+}
+
+.project-meta {
+    display: flex;
+    gap: 12px;
+    font-size: 0.8rem;
+    color: #666;
+}
+
+/* Buttons */
+.btn {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.95rem;
+    transition: all 0.2s;
+    font-weight: 500;
+}
+
+.btn-primary {
+    background: #60a5fa;
+    color: #fff;
+}
+
+.btn-primary:hover {
+    background: #3b82f6;
+}
+
+.btn-secondary {
+    background: #2a2a2a;
+    color: #e0e0e0;
+    border: 1px solid #444;
+}
+
+.btn-secondary:hover {
+    background: #3a3a3a;
+}
+
+.btn-sm {
+    padding: 6px 12px;
+    font-size: 0.85rem;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Discover Layout */
+.discover-layout {
+    display: grid;
+    grid-template-columns: 400px 1fr;
+    gap: 24px;
+}
+
+.discover-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.search-box, .trending-box {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 12px;
+    padding: 20px;
+}
+
+.search-box h3, .trending-box h3 {
+    margin-bottom: 16px;
+}
+
+#searchInput {
+    width: 100%;
+    padding: 10px;
+    background: #0f0f0f;
+    border: 1px solid #333;
+    border-radius: 8px;
+    color: #e0e0e0;
+    font-size: 0.95rem;
+    margin-bottom: 12px;
+}
+
+#searchInput:focus {
+    outline: none;
+    border-color: #60a5fa;
+}
+
+/* GitHub Repo Cards */
+.github-repo-card {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 16px;
+}
+
+.repo-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.repo-name {
+    font-weight: 600;
+    color: #fff;
+}
+
+.repo-stars {
+    color: #f59e0b;
+    font-size: 0.9rem;
+}
+
+.repo-description {
+    color: #888;
+    font-size: 0.9rem;
+    margin-bottom: 12px;
+}
+
+.repo-meta {
+    display: flex;
+    gap: 16px;
+    font-size: 0.85rem;
+    color: #666;
+    margin-bottom: 12px;
+}
+
+.repo-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* Project Detail */
+.back-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: #60a5fa;
+    cursor: pointer;
+    margin-bottom: 20px;
+    font-size: 0.95rem;
+}
+
+.back-btn:hover {
+    color: #3b82f6;
+}
+
+.detail-header {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 12px;
+    padding: 32px;
+    margin-bottom: 24px;
+}
+
+.detail-title {
+    font-size: 2rem;
+    color: #fff;
+    margin-bottom: 12px;
+}
+
+.detail-description {
+    color: #888;
+    margin-bottom: 16px;
+}
+
+.detail-actions {
+    display: flex;
+    gap: 12px;
+}
+
+.detail-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 24px;
+}
+
+.detail-section {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 24px;
+}
+
+.detail-section h3 {
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #333;
+}
+
+.update-item {
+    padding: 16px;
+    background: #0f0f0f;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    border-left: 3px solid #60a5fa;
+}
+
+.update-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.update-title {
+    font-weight: 600;
+    color: #fff;
+}
+
+.update-time {
+    color: #666;
+    font-size: 0.85rem;
+}
+
+.update-content {
+    color: #888;
+    font-size: 0.95rem;
+}
+
+.info-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 12px 0;
+    border-bottom: 1px solid #222;
+}
+
+.info-label {
+    color: #888;
+}
+
+.info-value {
+    color: #e0e0e0;
+    font-weight: 500;
+}
+
+.readme {
+    background: #0f0f0f;
+    padding: 16px;
+    border-radius: 8px;
+    overflow-x: auto;
+    color: #e0e0e0;
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    max-height: 600px;
+    overflow-y: auto;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: #666;
+    font-size: 1.1rem;
+}
+
+.loading {
+    text-align: center;
+    padding: 40px;
+    color: #888;
+}
+
+@media (max-width: 1024px) {
+    .discover-layout, .detail-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Import Modal */
+.modal-overlay {
+    pointer-events: auto;
+}
+
+.modal-overlay[style*="display: none"] {
+    pointer-events: none !important;
+}
+
+.import-tab {
+    padding: 12px 24px;
+    background: transparent;
+    border: none;
+    color: #888;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+    font-size: 0.95rem;
+}
+
+.import-tab:hover {
+    color: #fff;
+}
+
+.import-tab.active {
+    color: #60a5fa;
+    border-bottom-color: #60a5fa;
+}
+
+/* GitHubNeo Popular Cards */
+.neo-popular-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    margin-bottom: 32px;
+}
+
+.neo-popular-card {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 16px;
+    transition: border-color 0.2s;
+}
+
+.neo-popular-card:hover {
+    border-color: #484f58;
+}
+
+.neo-popular-card h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #58a6ff;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.neo-popular-card p {
+    color: #8b949e;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    margin-bottom: 12px;
+}
+
+.neo-popular-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 0.85rem;
+    color: #8b949e;
+}
+
+.neo-popular-meta span {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* GitHubNeo List View */
+.neo-repo-list {
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #0d1117;
+}
+
+.neo-repo-item {
+    padding: 16px;
+    border-bottom: 1px solid #21262d;
+    background: transparent;
+    transition: background 0.1s;
+}
+
+.neo-repo-item:hover {
+    background: #161b22;
+}
+
+.neo-repo-item:last-child {
+    border-bottom: none;
+}
+
+.neo-repo-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.neo-repo-name {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #58a6ff;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.neo-repo-name:hover {
+    text-decoration: underline;
+}
+
+.neo-public-badge {
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    color: #8b949e;
+    font-weight: 500;
+}
+
+.neo-sync-badge {
+    font-size: 0.8rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 500;
+}
+
+.neo-sync-badge.synced {
+    background: #238636;
+    color: #fff;
+}
+
+.neo-sync-badge.ahead {
+    background: #d29922;
+    color: #fff;
+}
+
+.neo-sync-badge.behind {
+    background: #1f6feb;
+    color: #fff;
+}
+
+.neo-sync-badge.dirty {
+    background: #da3633;
+    color: #fff;
+}
+
+.neo-repo-description {
+    color: #8b949e;
+    margin-bottom: 8px;
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
+.neo-repo-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 0.75rem;
+    color: #8b949e;
+    flex-wrap: wrap;
+}
+
+.neo-repo-meta > * {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.neo-language-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #3178c6;
+}
+
+.neo-meta-separator {
+    color: #30363d;
+    margin: 0 4px;
+}
+
+.neo-repo-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.neo-action-btn {
+    padding: 4px 12px;
+    background: transparent;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    color: #c9d1d9;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all 0.1s;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.neo-action-btn:hover {
+    background: #30363d;
+    border-color: #484f58;
+}
+
+.neo-action-btn.primary {
+    background: #238636;
+    border-color: #238636;
+    color: #fff;
+}
+
+.neo-action-btn.primary:hover {
+    background: #2ea043;
+    border-color: #2ea043;
+}
+
+@media (max-width: 768px) {
+    .project-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .main-nav {
+        flex-wrap: wrap;
+    }
+    
+    h1 {
+        font-size: 1.8rem;
+    }
+}
