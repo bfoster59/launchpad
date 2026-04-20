@@ -311,9 +311,26 @@ async function showProject(id) {
     }
 }
 
+// Snapshot of the detail view HTML taken before editProject replaces it,
+// so Cancel/Save can restore the DOM structure that showProject() expects.
+let _editBackupHTML = null;
+
+function _restoreDetailFromBackup() {
+    if (_editBackupHTML === null) return;
+    const el = document.querySelector('.project-detail');
+    while (el.firstChild) el.removeChild(el.firstChild);
+    el.insertAdjacentHTML('afterbegin', _editBackupHTML);
+    _editBackupHTML = null;
+}
+
+function cancelEdit() {
+    _restoreDetailFromBackup();
+    if (currentProject) showProject(currentProject.id);
+}
+
 async function editProject() {
     if (!currentProject) return;
-    
+
     const form = `
         <div style="background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 32px; max-width: 800px; margin: 0 auto;">
             <h2 style="margin-bottom: 24px; color: #fff;">Edit Project</h2>
@@ -361,13 +378,16 @@ async function editProject() {
                 </div>
                 <div style="display: flex; gap: 12px; margin-top: 24px;">
                     <button type="submit" class="btn btn-primary">Save Changes</button>
-                    <button type="button" class="btn btn-secondary" onclick="showProject(${currentProject.id})">Cancel</button>
+                    <button type="button" class="btn btn-secondary" onclick="cancelEdit()">Cancel</button>
                 </div>
             </form>
         </div>
     `;
     
-    document.querySelector('.project-detail').innerHTML = form;
+    const _pd = document.querySelector('.project-detail');
+    _editBackupHTML = _pd.innerHTML;
+    while (_pd.firstChild) _pd.removeChild(_pd.firstChild);
+    _pd.insertAdjacentHTML('afterbegin', form);
 }
 
 async function updateProject(event) {
@@ -395,6 +415,7 @@ async function updateProject(event) {
         if (!response.ok) throw new Error('Failed to update project');
         
         alert('Project updated!');
+        _restoreDetailFromBackup();
         loadProjects();
         showProject(currentProject.id);
     } catch (error) {

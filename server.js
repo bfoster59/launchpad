@@ -345,8 +345,9 @@ app.post('/api/projects/:id/clone', async (req, res) => {
             return res.status(400).json({ error: 'Project has no repository URL' });
         }
         
-        // Determine target directory - all projects go to /home/bfoster/projects/
-        const baseDir = '/home/bfoster/projects';
+        // Determine target directory - all projects go to /home/bfoster/<project>
+        // On Windows this resolves to C:\home\bfoster\<project>, mirroring Beelink layout.
+        const baseDir = '/home/bfoster';
         const targetDir = path.join(baseDir, project.name);
         
         // Check if already cloned
