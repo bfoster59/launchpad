@@ -37,7 +37,119 @@ function showView(viewName) {
         loadTrending();
     } else if (viewName === 'githubNeo') {
         loadNeoView();
+    } else if (viewName === 'settings') {
+        loadSettings();
     }
+}
+
+// ========== SETTINGS ==========
+
+async function loadSettings() {
+    try {
+        const res = await fetch('/api/settings');
+        const data = await res.json();
+
+        const patEl = document.getElementById('patStatus');
+        if (data.github_pat && data.github_pat.set) {
+            patEl.textContent = `Token is set (${data.github_pat.preview}). Enter a new value and Save to replace, or Clear to remove.`;
+            patEl.style.color = '#22c55e';
+        } else {
+            patEl.textContent = 'No token set — private-repo features and Bulk Import are disabled.';
+            patEl.style.color = '#f59e0b';
+        }
+
+        const cloneDirEl = document.getElementById('cloneDirEffective');
+        cloneDirEl.textContent = `Effective path: ${data.clone_base_dir_effective}`;
+        document.getElementById('settingsCloneDir').placeholder = data.clone_base_dir_effective;
+    } catch (e) {
+        console.error('loadSettings error', e);
+    }
+}
+
+async function saveSettingsPat() {
+    const value = document.getElementById('settingsPat').value.trim();
+    if (!value) {
+        alert('Enter a token value (or use Clear Token to remove).');
+        return;
+    }
+    try {
+        const res = await fetch('/api/settings/github_pat', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ value })
+        });
+        if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+        document.getElementById('settingsPat').value = '';
+        await loadSettings();
+        showToast('GitHub token saved and loaded.');
+    } catch (e) {
+        alert(`Error: ${e.message}`);
+    }
+}
+
+async function clearSettingsPat() {
+    if (!confirm('Clear the stored GitHub token?')) return;
+    try {
+        await fetch('/api/settings/github_pat', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ value: '' })
+        });
+        await loadSettings();
+        showToast('Token cleared.');
+    } catch (e) {
+        alert(`Error: ${e.message}`);
+    }
+}
+
+async function testGitHubPat() {
+    const resEl = document.getElementById('patTestResult');
+    resEl.textContent = 'Testing…';
+    resEl.style.color = '#888';
+    try {
+        const res = await fetch('/api/settings/test-github', { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) {
+            resEl.textContent = `✅ Connected as @${data.login}`;
+            resEl.style.color = '#22c55e';
+        } else {
+            resEl.textContent = `❌ ${data.error || 'Connection failed'}`;
+            resEl.style.color = '#ef4444';
+        }
+    } catch (e) {
+        resEl.textContent = `❌ ${e.message}`;
+        resEl.style.color = '#ef4444';
+    }
+}
+
+async function saveSettingsCloneDir() {
+    const value = document.getElementById('settingsCloneDir').value.trim();
+    if (!value) {
+        alert('Enter a path (e.g., /home/bfoster) or leave the default.');
+        return;
+    }
+    try {
+        const res = await fetch('/api/settings/clone_base_dir', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ value })
+        });
+        if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+        document.getElementById('settingsCloneDir').value = '';
+        await loadSettings();
+        showToast('Clone base directory saved.');
+    } catch (e) {
+        alert(`Error: ${e.message}`);
+    }
+}
+
+function showToast(msg) {
+    // Simple temp toast — appears top-right for 3s
+    const t = document.createElement('div');
+    t.textContent = msg;
+    t.style.cssText = 'position:fixed;top:16px;right:16px;background:#22c55e;color:#0b0b0b;padding:10px 16px;border-radius:8px;font-weight:600;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 3000);
 }
 
 function goBack() {

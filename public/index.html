@@ -25,6 +25,7 @@
         <button class="nav-tab" data-view="github" onclick="showView('github')">🐙 GitHub</button>
         <button class="nav-tab" data-view="githubNeo" onclick="showView('githubNeo')">🦞 GitHubNeo</button>
         <button class="nav-tab" data-view="discover" onclick="showView('discover')">🔍 Discover</button>
+        <button class="nav-tab" data-view="settings" onclick="showView('settings')">⚙️ Settings</button>
     </nav>
 
     <!-- Dashboard View -->
@@ -176,6 +177,52 @@
                 <div id="searchLoading" class="loading" style="display: none;">Searching...</div>
                 <div id="searchResults"></div>
             </div>
+        </div>
+    </div>
+
+    <!-- Settings View -->
+    <div id="settingsView" class="view">
+        <div style="max-width: 720px; margin: 0 auto; padding: 16px;">
+            <h2 style="margin-bottom: 8px;">⚙️ Settings</h2>
+            <p style="color: #888; margin-bottom: 32px;">All values are stored locally in SQLite — no cloud sync. Edits apply immediately and persist across server restarts.</p>
+
+            <section style="background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 24px; margin-bottom: 24px;">
+                <h3 style="margin-bottom: 16px; color: #fff;">GitHub Personal Access Token</h3>
+                <p style="color: #888; margin-bottom: 12px; font-size: 0.9rem;">
+                    Required for private-repo imports, bulk import from your account, and sync status.
+                    <a href="https://github.com/settings/tokens/new?scopes=repo" target="_blank" style="color: #60a5fa;">Create one (scopes: repo)</a>
+                </p>
+                <div id="patStatus" style="margin-bottom: 12px; color: #e0e0e0; font-size: 0.9rem;"></div>
+                <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+                    <input type="password" id="settingsPat" placeholder="ghp_xxxxxxxx (leave blank to keep existing)" style="flex: 1; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                    <button class="btn btn-primary" onclick="saveSettingsPat()">Save Token</button>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn btn-secondary" onclick="testGitHubPat()">Test Connection</button>
+                    <button class="btn btn-secondary" onclick="clearSettingsPat()" style="color: #ef4444; border-color: #7f1d1d;">Clear Token</button>
+                </div>
+                <div id="patTestResult" style="margin-top: 12px; color: #888; font-size: 0.9rem;"></div>
+            </section>
+
+            <section style="background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 24px; margin-bottom: 24px;">
+                <h3 style="margin-bottom: 16px; color: #fff;">Clone Base Directory</h3>
+                <p style="color: #888; margin-bottom: 12px; font-size: 0.9rem;">
+                    Where new clones land. Default <code>/home/bfoster</code> resolves to <code>C:\home\bfoster\&lt;project&gt;</code> on Windows, or <code>/home/bfoster/&lt;project&gt;</code> on Linux/macOS.
+                </p>
+                <div id="cloneDirEffective" style="margin-bottom: 12px; color: #e0e0e0; font-size: 0.9rem;"></div>
+                <div style="display: flex; gap: 8px;">
+                    <input type="text" id="settingsCloneDir" placeholder="/home/bfoster" style="flex: 1; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                    <button class="btn btn-primary" onclick="saveSettingsCloneDir()">Save Path</button>
+                </div>
+            </section>
+
+            <section style="background: #0f0f0f; border: 1px dashed #333; border-radius: 12px; padding: 16px;">
+                <h3 style="margin-bottom: 12px; color: #888; font-size: 0.95rem;">Where this data lives</h3>
+                <ul style="color: #888; font-size: 0.85rem; margin: 0; padding-left: 20px;">
+                    <li><code>launchpad.db</code> (SQLite) — gitignored, local only</li>
+                    <li>Loaded at server boot; env vars <code>GITHUB_TOKEN</code> and <code>CLONE_BASE_DIR</code> are fallbacks if no setting is stored</li>
+                </ul>
+            </section>
         </div>
     </div>
 
