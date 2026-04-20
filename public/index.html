@@ -72,6 +72,10 @@
             <div class="section-header" style="margin-bottom: 20px;">
                 <h2 style="font-size: 1.3rem;">📁 Repositories</h2>
                 <div style="display: flex; gap: 12px; align-items: center;">
+                    <div class="view-toggle" style="display: flex; gap: 2px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; padding: 2px;">
+                        <button id="neoViewCards" class="view-toggle-btn active" onclick="setGithubView('cards')" title="Card grid (click any card)">🔲 Cards</button>
+                        <button id="neoViewRows" class="view-toggle-btn" onclick="setGithubView('rows')" title="Detail rows with sync status">☰ Rows</button>
+                    </div>
                     <input type="text" id="neoSearchInput" placeholder="Find a repository…"
                            style="padding: 8px 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; width: 250px; font-size: 0.9rem;"
                            oninput="filterNeoRepos()">
@@ -86,7 +90,10 @@
                     <button class="btn btn-sm btn-secondary" onclick="checkAllSyncStatus()">🔄 Check All</button>
                 </div>
             </div>
-            <div id="neoRepoList" class="neo-repo-list">
+            <div id="neoRepoGrid" class="project-grid">
+                <div class="loading">Loading repositories…</div>
+            </div>
+            <div id="neoRepoList" class="neo-repo-list" style="display: none;">
                 <div class="loading">Loading repositories…</div>
             </div>
         </div>

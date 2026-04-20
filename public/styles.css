@@ -104,6 +104,26 @@ h1 {
     border-bottom-color: #60a5fa;
 }
 
+/* Cards/Rows view toggle on the GitHub tab */
+.view-toggle-btn {
+    padding: 6px 12px;
+    background: transparent;
+    border: none;
+    color: #888;
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    transition: all 0.15s;
+}
+.view-toggle-btn:hover {
+    color: #fff;
+    background: #1a1a1a;
+}
+.view-toggle-btn.active {
+    background: #1e2a44;
+    color: #93c5fd;
+}
+
 /* Views */
 .view {
     display: none;

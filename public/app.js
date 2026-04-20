@@ -1354,11 +1354,36 @@ function formatDate(timestamp) {
 let neoProjects = [];
 let neoFilteredProjects = [];
 
+// Legacy alias — Neo-era code called viewProject; the real detail-opener is showProject.
+function viewProject(id) {
+    showProject(id);
+}
+
+// Which layout the repository list uses on the GitHub tab. Persisted in localStorage.
+function getGithubView() {
+    return localStorage.getItem('launchpad.githubView') || 'cards';
+}
+
+function setGithubView(mode) {
+    localStorage.setItem('launchpad.githubView', mode);
+    document.getElementById('neoViewCards').classList.toggle('active', mode === 'cards');
+    document.getElementById('neoViewRows').classList.toggle('active', mode === 'rows');
+    document.getElementById('neoRepoGrid').style.display = mode === 'cards' ? '' : 'none';
+    document.getElementById('neoRepoList').style.display = mode === 'rows' ? '' : 'none';
+    renderNeoRepos();
+}
+
 async function loadNeoView() {
     try {
         const response = await fetch('/api/projects');
         neoProjects = await response.json();
         neoFilteredProjects = neoProjects;
+        // Apply persisted view choice
+        const mode = getGithubView();
+        document.getElementById('neoViewCards').classList.toggle('active', mode === 'cards');
+        document.getElementById('neoViewRows').classList.toggle('active', mode === 'rows');
+        document.getElementById('neoRepoGrid').style.display = mode === 'cards' ? '' : 'none';
+        document.getElementById('neoRepoList').style.display = mode === 'rows' ? '' : 'none';
         renderNeoPopular();
         renderNeoRepos();
     } catch (err) {
@@ -1420,13 +1445,22 @@ function renderNeoPopular() {
 }
 
 function renderNeoRepos() {
+    const mode = getGithubView();
     const listDiv = document.getElementById('neoRepoList');
-    
+    const gridDiv = document.getElementById('neoRepoGrid');
+
     if (neoFilteredProjects.length === 0) {
         listDiv.innerHTML = '<div class="loading">No repositories found</div>';
+        gridDiv.innerHTML = '<div class="empty-state">No repositories found</div>';
         return;
     }
-    
+
+    // Cards view — reuses the Dashboard/Recent-Projects card, which is
+    // already clickable (renderProjectCard wraps each card with a click
+    // handler that opens the detail view).
+    gridDiv.innerHTML = neoFilteredProjects.map(p => renderProjectCard(p)).join('');
+
+    // Rows view — the richer Neo layout with sync badge + inline actions.
     listDiv.innerHTML = neoFilteredProjects.map(project => {
         const syncStatus = project.sync_status || 'unknown';
         const syncIcon = getSyncIcon(syncStatus);
@@ -1442,10 +1476,10 @@ function renderNeoRepos() {
         const forks = project.forks || 0;
         
         return `
-            <div class="neo-repo-item">
+            <div class="neo-repo-item" style="cursor: pointer;" onclick="if(!event.target.closest('.neo-action-btn,.neo-repo-actions,a,button'))showProject(${project.id})">
                 <div class="neo-repo-header">
                     <div style="display: flex; align-items: center; gap: 8px;">
-                        <a href="#" class="neo-repo-name" onclick="viewProject(${project.id}); return false;">
+                        <a href="#" class="neo-repo-name" onclick="event.stopPropagation(); showProject(${project.id}); return false;">
                             ${project.name}
                         </a>
                         <span class="neo-public-badge">Public</span>
