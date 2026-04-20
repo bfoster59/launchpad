@@ -9,6 +9,28 @@ const HOST = '0.0.0.0';
 // Initialize database
 const db = new LaunchpadDB();
 
+// Any git operation we spawn should fail fast on auth prompts instead of
+// hanging — GIT_TERMINAL_PROMPT=0 tells git "no interactive stdin available".
+process.env.GIT_TERMINAL_PROMPT = '0';
+
+// Configure a per-repo credential helper after a private clone so future
+// fetch/pull/push use the stored PAT without re-embedding it in origin.
+function installCredentialHelper(repoDir, pat) {
+    try {
+        const fs = require('fs');
+        const path = require('path');
+        const { execSync } = require('child_process');
+        const credPath = path.join(repoDir, '.git', 'credentials');
+        fs.writeFileSync(credPath, `https://x-access-token:${pat}@github.com\n`, { mode: 0o600 });
+        execSync(`git -C "${repoDir}" config credential.helper "store --file=.git/credentials"`, {
+            stdio: 'ignore',
+            env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+        });
+    } catch (e) {
+        console.error('credential helper install failed:', e.message);
+    }
+}
+
 // GitHub client — loaded from settings table on boot, or env var fallback
 let octokit = null;
 
@@ -820,10 +842,14 @@ app.post('/api/projects/:id/clone', async (req, res) => {
             throw cloneErr; // re-throw for the outer catch to 500
         }
 
-        // Strip any injected token from origin so it doesn't live in .git/config
+        // Strip any injected token from origin AND install a per-repo credential
+        // helper so future fetch/pull/push authenticate without re-embedding the
+        // token in the URL. The PAT lives only in <repo>/.git/credentials
+        // (not tracked).
         if (cloneUrl !== project.repo_url) {
             try {
                 await execPromise(`git -C "${targetDir}" remote set-url origin "${project.repo_url}"`);
+                installCredentialHelper(targetDir, storedPat);
             } catch (e) { /* non-fatal: clone succeeded */ }
         }
         
