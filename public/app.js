@@ -16,6 +16,18 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // Navigation
+// Encode a string for safe embedding in an inline HTML onclick="..." handler.
+// Backslashes and quotes otherwise get eaten by the double-pass
+// (browser attribute parse, then JS string parse) and paths like
+// C:\home\bfoster\matrix-tv turn into C:homefostermatrix-tv.
+function attrStr(s) {
+    return JSON.stringify(String(s == null ? '' : s))
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
 function showView(viewName) {
     // Track previous view (but don't track 'detail' as previous)
     if (currentView !== 'detail') {
@@ -46,8 +58,20 @@ function showView(viewName) {
 
 async function loadSettings() {
     try {
-        const res = await fetch('/api/settings');
-        const data = await res.json();
+        const [settingsRes, termRes] = await Promise.all([
+            fetch('/api/settings'),
+            fetch('/api/util/terminal-choices')
+        ]);
+        const data = await settingsRes.json();
+        const termData = await termRes.json();
+
+        // Populate the terminal dropdown with platform-appropriate choices
+        const termSelect = document.getElementById('settingsTerminal');
+        const currentChoice = data.terminal_app || '';
+        termSelect.innerHTML = '<option value="">Use platform default</option>' +
+            termData.choices.map(c => `<option value="${c}"${c === currentChoice ? ' selected' : ''}>${c}</option>`).join('');
+        document.getElementById('terminalChoicesRow').textContent =
+            `Platform detected: ${termData.platform} — choices: ${termData.choices.join(', ')}`;
 
         const patEl = document.getElementById('patStatus');
         if (data.github_pat && data.github_pat.set) {
@@ -119,6 +143,22 @@ async function testGitHubPat() {
     } catch (e) {
         resEl.textContent = `❌ ${e.message}`;
         resEl.style.color = '#ef4444';
+    }
+}
+
+async function saveSettingsTerminal() {
+    const value = document.getElementById('settingsTerminal').value;
+    try {
+        const res = await fetch('/api/settings/terminal_app', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ value })
+        });
+        if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+        await loadSettings();
+        showToast(value ? `Terminal set to ${value}` : 'Using platform default');
+    } catch (e) {
+        alert(`Error: ${e.message}`);
     }
 }
 
@@ -399,8 +439,10 @@ async function showProject(id) {
                 <div class="info-row">
                     <div class="info-label">Local Path</div>
                     <div class="info-value" style="font-family: monospace; font-size: 0.85rem;">
-                        <span style="color: #60a5fa; cursor: pointer; text-decoration: underline;" onclick="copyToClipboard('${currentProject.local_path}', this)" title="Click to copy path">${currentProject.local_path}</span>
-                        <button class="btn btn-sm" style="margin-left: 8px;" onclick="copyTerminalCommand('${currentProject.local_path}')" title="Copy terminal command">📋 Copy cd command</button>
+                        <span style="color: #60a5fa; cursor: pointer; text-decoration: underline;" onclick="copyToClipboard(${attrStr(currentProject.local_path)}, this)" title="Click to copy path">${currentProject.local_path}</span>
+                        <button class="btn btn-sm" style="margin-left: 8px;" onclick="copyTerminalCommand(${attrStr(currentProject.local_path)})" title="Copy cd command">📋 Copy cd command</button>
+                        <button class="btn btn-sm" style="margin-left: 8px;" onclick="openInTerminal(${attrStr(currentProject.local_path)})" title="Open a new terminal in this folder">💻 Open Terminal</button>
+                        <button class="btn btn-sm" style="margin-left: 8px;" onclick="openInFolder(${attrStr(currentProject.local_path)})" title="Open in Explorer">📂 Open Folder</button>
                     </div>
                 </div>
             ` : ''}
@@ -1091,6 +1133,36 @@ function copyToClipboard(text, element) {
     }).catch(err => {
         alert('Failed to copy: ' + err);
     });
+}
+
+async function openInTerminal(path) {
+    try {
+        const res = await fetch('/api/util/open-terminal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to open terminal');
+        if (typeof showToast === 'function') showToast(`Opened terminal in ${path}`);
+    } catch (e) {
+        alert(`Error: ${e.message}`);
+    }
+}
+
+async function openInFolder(path) {
+    try {
+        const res = await fetch('/api/util/open-folder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to open folder');
+        if (typeof showToast === 'function') showToast(`Opened folder ${path}`);
+    } catch (e) {
+        alert(`Error: ${e.message}`);
+    }
 }
 
 function copyTerminalCommand(path) {

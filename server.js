@@ -345,6 +345,94 @@ app.get('/api/projects/:id/sync-status', async (req, res) => {
 });
 
 // Clone repo to local
+// ========== UTILITY: Open terminal / folder in the project's local_path ==========
+
+// Resolve the user's preferred terminal command template. Settings > env > platform default.
+function getTerminalCommand(cwd) {
+    const stored = db.getSetting('terminal_app');
+    const platform = process.platform;
+    const cwdQuoted = `"${cwd.replace(/"/g, '\\"')}"`;
+
+    const defaults = {
+        win32: {
+            wt: `wt new-tab -d ${cwdQuoted}`,
+            cmd: `start cmd /K "cd /d ${cwdQuoted}"`,
+            powershell: `start powershell -NoExit -Command "Set-Location -LiteralPath ${cwdQuoted}"`,
+            pwsh: `start pwsh -NoExit -Command "Set-Location -LiteralPath ${cwdQuoted}"`,
+            gitbash: `start "" "C:\\Program Files\\Git\\bin\\bash.exe" --cd=${cwdQuoted}`
+        },
+        darwin: {
+            terminal: `open -a Terminal ${cwdQuoted}`,
+            iterm: `open -a iTerm ${cwdQuoted}`
+        },
+        linux: {
+            'gnome-terminal': `gnome-terminal --working-directory=${cwdQuoted}`,
+            konsole: `konsole --workdir ${cwdQuoted}`,
+            xterm: `xterm -e "cd ${cwdQuoted} && bash"`
+        }
+    };
+
+    const platformDefaults = defaults[platform] || defaults.linux;
+    if (stored && platformDefaults[stored]) return platformDefaults[stored];
+    const fallbackKey = platform === 'win32' ? 'wt'
+                      : platform === 'darwin' ? 'terminal'
+                      : 'gnome-terminal';
+    return platformDefaults[fallbackKey];
+}
+
+app.post('/api/util/open-terminal', (req, res) => {
+    try {
+        const { spawn } = require('child_process');
+        const fs = require('fs');
+        const cwd = req.body.path;
+        if (!cwd || !fs.existsSync(cwd)) {
+            return res.status(400).json({ error: 'Path not found' });
+        }
+        const cmd = getTerminalCommand(cwd);
+        // spawn with shell:true + detached+unref so the terminal opens a
+        // visible window and outlives the launchpad request.
+        const child = spawn(cmd, { shell: true, detached: true, stdio: 'ignore' });
+        child.on('error', (err) => console.error('open-terminal:', err.message));
+        child.unref();
+        res.json({ success: true, command: cmd, cwd });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/util/open-folder', (req, res) => {
+    try {
+        const { spawn } = require('child_process');
+        const fs = require('fs');
+        const cwd = req.body.path;
+        if (!cwd || !fs.existsSync(cwd)) {
+            return res.status(400).json({ error: 'Path not found' });
+        }
+        // Use the OS file-manager opener with path as an argument — no shell
+        // string interpolation beyond the single path arg.
+        const openerArgs = process.platform === 'win32' ? ['explorer', cwd]
+                         : process.platform === 'darwin' ? ['open', cwd]
+                         : ['xdg-open', cwd];
+        const child = spawn(openerArgs[0], [openerArgs[1]], { detached: true, stdio: 'ignore' });
+        child.on('error', (err) => console.error('open-folder:', err.message));
+        child.unref();
+        res.json({ success: true, command: openerArgs.join(' '), cwd });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// List valid terminal_app choices for the current platform (used by Settings UI)
+app.get('/api/util/terminal-choices', (req, res) => {
+    const platform = process.platform;
+    const choices = {
+        win32: ['wt', 'cmd', 'powershell', 'pwsh', 'gitbash'],
+        darwin: ['terminal', 'iterm'],
+        linux: ['gnome-terminal', 'konsole', 'xterm']
+    };
+    res.json({ platform, choices: choices[platform] || choices.linux });
+});
+
 // Install deps (npm install) for a project's local clone. Blocking — returns
 // once install finishes or fails.
 app.post('/api/projects/:id/install-deps', async (req, res) => {
@@ -668,7 +756,7 @@ app.put('/api/settings/:key', (req, res) => {
     try {
         const { key } = req.params;
         const { value } = req.body;
-        const allowed = new Set(['github_pat', 'clone_base_dir']);
+        const allowed = new Set(['github_pat', 'clone_base_dir', 'terminal_app']);
         if (!allowed.has(key)) {
             return res.status(400).json({ error: `Unknown setting: ${key}` });
         }
