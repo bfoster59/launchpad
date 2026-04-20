@@ -1,6 +1,11 @@
 node_modules/
 *.db
+*.db-shm
+*.db-wal
 *.log
 .env
+.env.local
 .DS_Store
 dist/
+_fix-*.js
+
