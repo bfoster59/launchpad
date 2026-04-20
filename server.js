@@ -705,6 +705,11 @@ app.post('/api/projects/:id/commit', async (req, res) => {
                         title: 'Commit',
                         content: message
                     });
+                    // Activity on a dormant project nudges lifecycle to 'building'
+                    if (project.status === 'idea' || project.status === 'paused') {
+                        db.updateProject(project.id, { status: 'building' });
+                        results.statusBumped = 'building';
+                    }
                 }
             } catch (e) {
                 results.commit = { ok: false, error: e.stderr || e.message };
@@ -788,7 +793,43 @@ app.post('/api/projects/:id/clone', async (req, res) => {
         // folder named '-p'.
         const repoDir = path.dirname(targetDir);
         fs.mkdirSync(repoDir, { recursive: true });
-        await execPromise(`git clone "${project.repo_url}" "${targetDir}"`);
+
+        // If a PAT is stored, inject it into the clone URL so private repos
+        // work without a terminal prompt. We then rewrite origin to the clean
+        // URL so the token isn't persisted in .git/config.
+        const storedPat = db.getSetting('github_pat') || process.env.GITHUB_TOKEN;
+        let cloneUrl = project.repo_url;
+        const isGitHubHttps = /^https:\/\/github\.com\//i.test(project.repo_url);
+        if (storedPat && isGitHubHttps) {
+            cloneUrl = project.repo_url.replace(/^https:\/\//, `https://x-access-token:${storedPat}@`);
+        }
+
+        try {
+            await execPromise(`git clone "${cloneUrl}" "${targetDir}"`);
+        } catch (cloneErr) {
+            const msg = (cloneErr.stderr || cloneErr.message || '').trim();
+            // Classify the common failure modes so the UI can show something useful
+            if (/authentication failed|could not read username|terminal prompts disabled/i.test(msg)) {
+                return res.status(401).json({
+                    error: 'Authentication failed — set a GitHub PAT in Settings (needs repo scope) and retry',
+                    details: msg
+                });
+            }
+            if (/not found|repository.*does not exist|could not find remote/i.test(msg)) {
+                return res.status(404).json({
+                    error: 'Repository not found or access denied on GitHub',
+                    details: msg
+                });
+            }
+            throw cloneErr; // re-throw for the outer catch to 500
+        }
+
+        // Strip any injected token from origin so it doesn't live in .git/config
+        if (cloneUrl !== project.repo_url) {
+            try {
+                await execPromise(`git -C "${targetDir}" remote set-url origin "${project.repo_url}"`);
+            } catch (e) { /* non-fatal: clone succeeded */ }
+        }
         
         // Update project with local path
         const updated = db.updateProject(project.id, { local_path: targetDir });

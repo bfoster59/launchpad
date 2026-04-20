@@ -349,10 +349,24 @@ function renderProjectCard(p) {
     const categoryIcon = getCategoryIcon(p.category);
     const sourceIcon = p.source === 'github' ? '🐙' : '';
     const localIcon = p.local_path ? '📁' : '';
-    
+
+    // Git sync badge — only rendered when the project has a local clone and
+    // sync state has been checked (either by opening the detail or by 'Check All').
+    let syncBadge = '';
+    if (p.local_path && p.sync_status) {
+        const s = p.sync_status;
+        const icon = getSyncIcon(s);
+        const label = getSyncText(s);
+        const badgeClass = getSyncBadgeClass(s);
+        syncBadge = `<span class="neo-sync-badge ${badgeClass}" style="margin-left: 6px;">${icon} ${label}</span>`;
+    }
+
     return `
         <div class="project-card" onclick="showProject(${p.id})">
-            <div class="project-status status-${p.status}">${p.status}</div>
+            <div style="display: flex; justify-content: space-between; align-items: start; gap: 8px;">
+                <div class="project-status status-${p.status}">${p.status}</div>
+                ${syncBadge}
+            </div>
             <div class="project-name">${sourceIcon} ${localIcon} ${p.name}</div>
             <div class="project-description">${p.description || 'No description'}</div>
             <div class="project-meta">
@@ -365,11 +379,28 @@ function renderProjectCard(p) {
 
 // ========== PROJECT DETAIL ==========
 
+// Cached the initial detail-view template at page load so showProject can
+// always rehydrate its expected DOM, even after editProject (or anything else)
+// replaces .project-detail innerHTML.
+let _detailTemplateHTML = null;
+function _ensureDetailDom() {
+    if (!_detailTemplateHTML) {
+        _detailTemplateHTML = document.querySelector('.project-detail').innerHTML;
+    }
+    if (!document.getElementById('detailTitle')) {
+        const pd = document.querySelector('.project-detail');
+        while (pd.firstChild) pd.removeChild(pd.firstChild);
+        pd.insertAdjacentHTML('afterbegin', _detailTemplateHTML);
+        _editBackupHTML = null; // any stale backup is irrelevant now
+    }
+}
+
 async function showProject(id) {
     try {
+        _ensureDetailDom();
         const response = await fetch(`/api/projects/${id}`);
         currentProject = await response.json();
-        
+
         document.getElementById('detailTitle').textContent = currentProject.name;
         document.getElementById('detailDescription').textContent = currentProject.description || '';
         
@@ -471,6 +502,38 @@ async function showProject(id) {
                 <div class="info-row">
                     <div class="info-label">Live Site</div>
                     <div class="info-value"><a href="${currentProject.live_url}" target="_blank" style="color: #60a5fa;">Visit</a></div>
+                </div>
+            ` : ''}
+            ${currentProject.target_market ? `
+                <div class="info-row">
+                    <div class="info-label">Target Market</div>
+                    <div class="info-value">${currentProject.target_market}</div>
+                </div>
+            ` : ''}
+            ${currentProject.monetization ? `
+                <div class="info-row">
+                    <div class="info-label">Monetization</div>
+                    <div class="info-value">${currentProject.monetization}</div>
+                </div>
+            ` : ''}
+            ${currentProject.pricing ? `
+                <div class="info-row">
+                    <div class="info-label">Pricing</div>
+                    <div class="info-value">${currentProject.pricing}</div>
+                </div>
+            ` : ''}
+            <div class="info-row">
+                <div class="info-label">Created</div>
+                <div class="info-value" style="color: #888; font-size: 0.85rem;">${currentProject.created_at ? new Date(currentProject.created_at * 1000).toLocaleString() : '—'}</div>
+            </div>
+            <div class="info-row">
+                <div class="info-label">Last updated</div>
+                <div class="info-value" style="color: #888; font-size: 0.85rem;">${currentProject.updated_at ? new Date(currentProject.updated_at * 1000).toLocaleString() : '—'}</div>
+            </div>
+            ${currentProject.launched_at ? `
+                <div class="info-row">
+                    <div class="info-label">Launched</div>
+                    <div class="info-value" style="color: #888; font-size: 0.85rem;">${new Date(currentProject.launched_at * 1000).toLocaleString()}</div>
                 </div>
             ` : ''}
         `;
@@ -1576,19 +1639,33 @@ function copyNeoPath(path) {
     });
 }
 
+// Cache sync state across both global arrays so sync badges appear on
+// Dashboard + My Projects cards too (not just GitHub tab).
+function _setSyncStatus(projectId, status) {
+    const lists = [typeof projects !== 'undefined' ? projects : null,
+                   typeof neoProjects !== 'undefined' ? neoProjects : null,
+                   typeof neoFilteredProjects !== 'undefined' ? neoFilteredProjects : null];
+    lists.forEach(list => {
+        if (!list) return;
+        const p = list.find(x => x.id === projectId);
+        if (p) p.sync_status = status;
+    });
+}
+
 async function checkSingleSync(projectId) {
     try {
         const response = await fetch(`/api/projects/${projectId}/sync-status`);
         const data = await response.json();
-        
-        // Update the project in our local array
-        const index = neoProjects.findIndex(p => p.id === projectId);
-        if (index !== -1) {
-            neoProjects[index].sync_status = data.sync_status;
+        _setSyncStatus(projectId, data.status);
+        filterNeoRepos(); // Re-render GitHub tab if visible
+        // Refresh Dashboard/My Projects cards if those arrays are populated
+        if (typeof renderDashboard === 'function') renderDashboard();
+        if (typeof renderMyProjects === 'function') renderMyProjects();
+        if (typeof showToast === 'function') {
+            showToast(`Sync: ${getSyncText(data.status)}`);
+        } else {
+            alert(`Sync Status: ${getSyncText(data.status)}\n\n${(data.messages || []).join(', ')}`);
         }
-        
-        filterNeoRepos(); // Re-render
-        alert(`Sync Status: ${getSyncText(data.sync_status)}\n\n${data.message || ''}`);
     } catch (err) {
         alert('Failed to check sync status: ' + err.message);
     }
@@ -1607,16 +1684,17 @@ async function checkAllSyncStatus() {
         
         const results = await Promise.all(promises);
         
-        // Update all projects
+        // Update all projects in every cache so cards everywhere reflect state
+        const filtered = neoProjects.filter(p => p.local_path);
         results.forEach((data, i) => {
-            const project = neoProjects.filter(p => p.local_path)[i];
-            if (project) {
-                project.sync_status = data.sync_status;
-            }
+            if (filtered[i]) _setSyncStatus(filtered[i].id, data.status);
         });
-        
+
         filterNeoRepos();
-        alert('✓ All repositories checked!');
+        if (typeof renderDashboard === 'function') renderDashboard();
+        if (typeof renderMyProjects === 'function') renderMyProjects();
+        if (typeof showToast === 'function') showToast(`Checked ${results.length} repositories`);
+        else alert('✓ All repositories checked!');
     } catch (err) {
         alert('Failed to check all: ' + err.message);
     } finally {
