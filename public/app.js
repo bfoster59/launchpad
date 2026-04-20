@@ -1215,27 +1215,27 @@ async function importSelectedRepos() {
 
 async function searchGitHub() {
     const query = document.getElementById('searchInput').value.trim();
-    if (!query) {
-        alert('Enter a search term');
+    const language = document.getElementById('discoverLanguage')?.value || '';
+    if (!query && !language) {
+        alert('Enter a search term or pick a language');
         return;
     }
-    
+    const fullQuery = language ? `${query} language:${language}` : query;
+
+    document.getElementById('searchResultsSection').style.display = 'block';
     document.getElementById('searchLoading').style.display = 'block';
     document.getElementById('searchResults').style.display = 'none';
-    
+
     try {
-        const response = await fetch(`/api/github/search?q=${encodeURIComponent(query)}&per_page=20`);
+        const response = await fetch(`/api/github/search?q=${encodeURIComponent(fullQuery)}&per_page=20`);
         const data = await response.json();
-        
-        if (!response.ok) {
-            throw new Error(data.error || 'Search failed');
-        }
-        
+        if (!response.ok) throw new Error(data.error || 'Search failed');
+
         searchResults = data.items;
         renderSearchResults();
-        
+
         document.getElementById('searchLoading').style.display = 'none';
-        document.getElementById('searchResults').style.display = 'block';
+        document.getElementById('searchResults').style.display = 'grid';
     } catch (error) {
         alert(`Search error: ${error.message}`);
         document.getElementById('searchLoading').style.display = 'none';
@@ -1244,63 +1244,127 @@ async function searchGitHub() {
 
 function renderSearchResults() {
     const container = document.getElementById('searchResults');
-    
     if (searchResults.length === 0) {
         container.innerHTML = '<div class="empty-state">No results found</div>';
         return;
     }
-    
-    container.innerHTML = `
-        <div style="margin-bottom: 16px; color: #888;">Found ${searchResults.length} repositories</div>
-        ${searchResults.map(repo => renderGitHubRepoCard(repo)).join('')}
-    `;
+    container.innerHTML = searchResults.map(repo => renderGitHubRepoCard(repo)).join('');
+}
+
+// ========== PINNED (localStorage) ==========
+
+function getPinned() {
+    try { return JSON.parse(localStorage.getItem('launchpad.pinned') || '{}'); }
+    catch { return {}; }
+}
+
+function setPinned(map) {
+    localStorage.setItem('launchpad.pinned', JSON.stringify(map));
+}
+
+function isPinned(fullName) {
+    return !!getPinned()[fullName];
+}
+
+function togglePin(fullName, repoJson) {
+    const map = getPinned();
+    if (map[fullName]) {
+        delete map[fullName];
+        if (typeof showToast === 'function') showToast(`Unpinned ${fullName}`);
+    } else {
+        let repo;
+        try { repo = JSON.parse(decodeURIComponent(repoJson)); }
+        catch { repo = { full_name: fullName, html_url: `https://github.com/${fullName}` }; }
+        map[fullName] = {
+            full_name: repo.full_name,
+            description: repo.description,
+            html_url: repo.html_url,
+            language: repo.language,
+            stargazers_count: repo.stargazers_count || 0,
+            forks_count: repo.forks_count || 0,
+            pinnedAt: Date.now()
+        };
+        if (typeof showToast === 'function') showToast(`📌 Pinned ${fullName}`);
+    }
+    setPinned(map);
+    renderPinned();
+    // Re-render trending/search so the pin button state updates
+    if (typeof trendingRepos !== 'undefined' && trendingRepos.length) renderTrending();
+    if (typeof searchResults !== 'undefined' && searchResults.length) renderSearchResults();
+}
+
+function renderPinned() {
+    const section = document.getElementById('pinnedSection');
+    const list = document.getElementById('pinnedList');
+    if (!section || !list) return;
+    const map = getPinned();
+    const pins = Object.values(map).sort((a, b) => (b.pinnedAt || 0) - (a.pinnedAt || 0));
+    if (pins.length === 0) {
+        section.style.display = 'none';
+        return;
+    }
+    section.style.display = 'block';
+    list.innerHTML = pins.map(r => renderGitHubRepoCard(r)).join('');
 }
 
 // ========== TRENDING ==========
 
 async function loadTrending() {
+    const range = document.getElementById('trendingRange')?.value || 'monthly';
+    const lang = document.getElementById('discoverLanguage')?.value || '';
+    const params = new URLSearchParams({ since: range });
+    if (lang) params.set('language', lang);
     try {
-        const response = await fetch('/api/github/trending?since=monthly');
+        const response = await fetch(`/api/github/trending?${params.toString()}`);
         const data = await response.json();
-        
-        if (!response.ok) {
-            throw new Error(data.error || 'Failed to load trending');
-        }
-        
-        trendingRepos = data.items;
+        if (!response.ok) throw new Error(data.error || 'Failed to load trending');
+        trendingRepos = data.items || [];
         renderTrending();
+        renderPinned();
     } catch (error) {
         console.error('Error loading trending:', error);
+        const container = document.getElementById('trendingList');
+        if (container) container.innerHTML = `<div class="empty-state">Couldn't load trending: ${error.message}</div>`;
     }
 }
 
 function renderTrending() {
     const container = document.getElementById('trendingList');
-    
-    if (trendingRepos.length === 0) {
-        container.innerHTML = '<div class="empty-state">Loading trending repos...</div>';
+    if (!container) return;
+    if (!trendingRepos || trendingRepos.length === 0) {
+        container.innerHTML = '<div class="empty-state">No trending repos — try a different range.</div>';
         return;
     }
-    
-    container.innerHTML = `
-        <div style="margin-bottom: 16px; color: #888;">Top trending repos this month</div>
-        ${trendingRepos.map(repo => renderGitHubRepoCard(repo)).join('')}
-    `;
+    container.innerHTML = trendingRepos.map(repo => renderGitHubRepoCard(repo)).join('');
 }
 
 function renderGitHubRepoCard(repo) {
+    const stars = (repo.stargazers_count || 0).toLocaleString();
+    const forks = (repo.forks_count || 0).toLocaleString();
+    const pinned = isPinned(repo.full_name);
+    const repoJson = encodeURIComponent(JSON.stringify({
+        full_name: repo.full_name,
+        description: repo.description,
+        html_url: repo.html_url,
+        language: repo.language,
+        stargazers_count: repo.stargazers_count || 0,
+        forks_count: repo.forks_count || 0
+    }));
     return `
-        <div class="github-repo-card">
-            <div class="repo-header">
-                <div class="repo-name">${repo.full_name}</div>
-                <div class="repo-stars">⭐ ${repo.stargazers_count.toLocaleString()}</div>
+        <div class="github-repo-card project-card">
+            <div class="repo-header" style="display: flex; justify-content: space-between; align-items: start; gap: 8px;">
+                <div class="repo-name" style="font-weight: 600; color: #93c5fd;">${repo.full_name}</div>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                    <button class="btn btn-sm ${pinned ? 'btn-primary' : 'btn-secondary'}" onclick="togglePin('${repo.full_name}', '${repoJson}'); event.stopPropagation();" title="${pinned ? 'Unpin' : 'Pin to top'}">${pinned ? '📌 Pinned' : '📌 Pin'}</button>
+                    <div class="repo-stars" style="color: #888; font-size: 0.9rem;">⭐ ${stars}</div>
+                </div>
             </div>
-            <div class="repo-description">${repo.description || 'No description'}</div>
-            <div class="repo-meta">
+            <div class="repo-description" style="margin: 8px 0; color: #ccc;">${repo.description || 'No description'}</div>
+            <div class="repo-meta" style="color: #888; font-size: 0.85rem; display: flex; gap: 12px;">
                 ${repo.language ? `<span>🔧 ${repo.language}</span>` : ''}
-                <span>🍴 ${repo.forks_count.toLocaleString()} forks</span>
+                <span>🍴 ${forks} forks</span>
             </div>
-            <div class="repo-actions">
+            <div class="repo-actions" style="margin-top: 12px; display: flex; gap: 8px;">
                 <button class="btn btn-sm" onclick="importGitHubRepo('${repo.html_url}')">📥 Import</button>
                 <a href="${repo.html_url}" target="_blank" class="btn btn-sm btn-secondary">View on GitHub</a>
             </div>

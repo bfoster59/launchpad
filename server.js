@@ -200,8 +200,8 @@ app.get('/api/github/search', async (req, res) => {
             return res.status(400).json({ error: 'Query required' });
         }
         
-        const publicOctokit = new Octokit();
-        const { data } = await publicOctokit.search.repos({
+        const client = octokit || new Octokit();
+        const { data } = await client.search.repos({
             q,
             sort: 'stars',
             order: 'desc',
@@ -218,33 +218,29 @@ app.get('/api/github/search', async (req, res) => {
 app.get('/api/github/trending', async (req, res) => {
     try {
         const { language = '', since = 'monthly' } = req.query;
-        
-        // Calculate date range
+
         const now = new Date();
-        let dateFilter;
-        if (since === 'daily') {
-            dateFilter = new Date(now - 24 * 60 * 60 * 1000);
-        } else if (since === 'weekly') {
-            dateFilter = new Date(now - 7 * 24 * 60 * 60 * 1000);
-        } else {
-            dateFilter = new Date(now - 30 * 24 * 60 * 60 * 1000);
-        }
-        
+        const ranges = {
+            daily: 24 * 60 * 60 * 1000,
+            weekly: 7 * 24 * 60 * 60 * 1000,
+            monthly: 30 * 24 * 60 * 60 * 1000,
+            yearly: 365 * 24 * 60 * 60 * 1000
+        };
+        const dateFilter = new Date(now - (ranges[since] || ranges.monthly));
         const dateStr = dateFilter.toISOString().split('T')[0];
-        
+
         let query = `created:>${dateStr}`;
-        if (language) {
-            query += ` language:${language}`;
-        }
-        
-        const publicOctokit = new Octokit();
-        const { data } = await publicOctokit.search.repos({
+        if (language) query += ` language:${language}`;
+
+        // Use authenticated client when available — 5000/hr vs 60/hr unauthed
+        const client = octokit || new Octokit();
+        const { data } = await client.search.repos({
             q: query,
             sort: 'stars',
             order: 'desc',
             per_page: 10
         });
-        
+
         res.json(data);
     } catch (error) {
         res.status(500).json({ error: error.message });

@@ -160,25 +160,52 @@
 
     <!-- Discover View -->
     <div id="discoverView" class="view">
-        <div class="discover-layout">
-            <div class="discover-sidebar">
-                <div class="search-box">
-                    <h3>🔍 Search GitHub</h3>
-                    <input type="text" id="searchInput" placeholder="e.g., nextjs starter, saas template" 
-                           onkeypress="if(event.key==='Enter') searchGitHub()">
-                    <button class="btn btn-primary" onclick="searchGitHub()">Search</button>
-                </div>
-                
-                <div class="trending-box">
-                    <h3>🔥 Trending This Month</h3>
-                    <div id="trendingList"></div>
-                </div>
+        <div class="section-header">
+            <h2>🔍 Discover GitHub</h2>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <input type="text" id="searchInput" placeholder="Search GitHub (e.g. nextjs starter)"
+                       style="padding: 8px 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; width: 280px;"
+                       onkeypress="if(event.key==='Enter') searchGitHub()">
+                <select id="discoverLanguage" style="padding: 8px 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">
+                    <option value="">Any language</option>
+                    <option value="TypeScript">TypeScript</option>
+                    <option value="JavaScript">JavaScript</option>
+                    <option value="Python">Python</option>
+                    <option value="Go">Go</option>
+                    <option value="Rust">Rust</option>
+                    <option value="Java">Java</option>
+                    <option value="C#">C#</option>
+                    <option value="C++">C++</option>
+                </select>
+                <button class="btn btn-primary" onclick="searchGitHub()">Search</button>
             </div>
-            
-            <div class="discover-main">
-                <div id="searchLoading" class="loading" style="display: none;">Searching...</div>
-                <div id="searchResults"></div>
+        </div>
+
+        <!-- Pinned section (user-curated via localStorage) -->
+        <div class="section" id="pinnedSection" style="display: none; margin-top: 24px;">
+            <h3 style="margin-bottom: 12px; font-size: 1.1rem;">📌 Pinned</h3>
+            <div id="pinnedList" class="project-grid"></div>
+        </div>
+
+        <!-- Search results (only visible after a search) -->
+        <div class="section" id="searchResultsSection" style="display: none; margin-top: 24px;">
+            <h3 style="margin-bottom: 12px; font-size: 1.1rem;">Search results</h3>
+            <div id="searchLoading" class="loading" style="display: none;">Searching…</div>
+            <div id="searchResults" class="project-grid"></div>
+        </div>
+
+        <!-- Trending — top 10 for the selected range -->
+        <div class="section" style="margin-top: 32px;">
+            <div class="section-header" style="margin-bottom: 16px;">
+                <h3 style="font-size: 1.1rem;">🔥 Trending</h3>
+                <select id="trendingRange" onchange="loadTrending()" style="padding: 6px 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem;">
+                    <option value="daily">Today</option>
+                    <option value="weekly">This week</option>
+                    <option value="monthly" selected>This month</option>
+                    <option value="yearly">This year</option>
+                </select>
             </div>
+            <div id="trendingList" class="project-grid"></div>
         </div>
     </div>
 
