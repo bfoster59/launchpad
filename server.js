@@ -345,6 +345,99 @@ app.get('/api/projects/:id/sync-status', async (req, res) => {
 });
 
 // Clone repo to local
+// Commit + optionally push the project's local clone
+app.post('/api/projects/:id/commit', async (req, res) => {
+    try {
+        const { exec } = require('child_process');
+        const util = require('util');
+        const execPromise = util.promisify(exec);
+        const fs = require('fs');
+
+        const project = db.getProject(parseInt(req.params.id));
+        if (!project) return res.status(404).json({ error: 'Project not found' });
+        if (!project.local_path || !fs.existsSync(project.local_path)) {
+            return res.status(400).json({ error: 'Repository not cloned locally' });
+        }
+
+        const message = (req.body.message || '').trim();
+        const push = req.body.push !== false;
+        const addAll = req.body.addAll !== false;
+
+        if (addAll && !message) {
+            return res.status(400).json({ error: 'Commit message required when committing new changes' });
+        }
+
+        const cwd = project.local_path;
+        const shq = (s) => `"${s.replace(/"/g, '\\"')}"`;
+        const results = {};
+
+        if (addAll) {
+            // Only commit when there's something staged
+            try {
+                await execPromise(`cd ${shq(cwd)} && git add -A`);
+                const { stdout: statusOut } = await execPromise(`cd ${shq(cwd)} && git status --porcelain`);
+                if (!statusOut.trim()) {
+                    results.commit = { skipped: true, reason: 'nothing to commit' };
+                } else {
+                    const { stdout: commitOut } = await execPromise(`cd ${shq(cwd)} && git commit -m ${shq(message)}`);
+                    results.commit = { ok: true, output: commitOut.trim() };
+                    db.addUpdate({
+                        project_id: project.id,
+                        type: 'progress',
+                        title: 'Commit',
+                        content: message
+                    });
+                }
+            } catch (e) {
+                results.commit = { ok: false, error: e.stderr || e.message };
+            }
+        }
+
+        if (push) {
+            try {
+                const { stdout, stderr } = await execPromise(`cd ${shq(cwd)} && git push`);
+                results.push = { ok: true, output: (stdout + stderr).trim() };
+            } catch (e) {
+                results.push = { ok: false, error: (e.stderr || e.message).trim() };
+            }
+        }
+
+        res.json({ success: true, results });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Pull (fast-forward only) to catch up a project behind origin
+app.post('/api/projects/:id/pull', async (req, res) => {
+    try {
+        const { exec } = require('child_process');
+        const util = require('util');
+        const execPromise = util.promisify(exec);
+        const fs = require('fs');
+
+        const project = db.getProject(parseInt(req.params.id));
+        if (!project) return res.status(404).json({ error: 'Project not found' });
+        if (!project.local_path || !fs.existsSync(project.local_path)) {
+            return res.status(400).json({ error: 'Repository not cloned locally' });
+        }
+
+        const cwd = project.local_path;
+        try {
+            const { stdout, stderr } = await execPromise(`cd "${cwd}" && git pull --ff-only`);
+            res.json({ success: true, output: (stdout + stderr).trim() });
+        } catch (e) {
+            res.status(409).json({
+                success: false,
+                error: 'Fast-forward pull failed — resolve manually in terminal',
+                details: (e.stderr || e.message).trim()
+            });
+        }
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.post('/api/projects/:id/clone', async (req, res) => {
     try {
         const { exec } = require('child_process');

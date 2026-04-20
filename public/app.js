@@ -535,6 +535,68 @@ async function updateProject(event) {
     }
 }
 
+async function showCommitDialog(needsCommit) {
+    if (!currentProject) return;
+
+    let message = null;
+    if (needsCommit) {
+        message = prompt('Commit message:');
+        if (message === null) return; // user cancelled
+        message = message.trim();
+        if (!message) {
+            alert('Commit message cannot be empty.');
+            return;
+        }
+    } else {
+        if (!confirm('Push existing commits to origin?')) return;
+    }
+
+    try {
+        const res = await fetch(`/api/projects/${currentProject.id}/commit`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: message || '', push: true, addAll: needsCommit })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Commit failed');
+
+        // Summarize result
+        const parts = [];
+        if (data.results.commit) {
+            if (data.results.commit.ok) parts.push('✅ Committed');
+            else if (data.results.commit.skipped) parts.push('⏭ Nothing to commit');
+            else parts.push(`❌ Commit failed: ${data.results.commit.error}`);
+        }
+        if (data.results.push) {
+            if (data.results.push.ok) parts.push('✅ Pushed to origin');
+            else parts.push(`❌ Push failed: ${data.results.push.error}`);
+        }
+        alert(parts.join('\n'));
+
+        // Refresh sync status to reflect new state
+        await checkSyncStatus();
+    } catch (e) {
+        alert(`Error: ${e.message}`);
+    }
+}
+
+async function pullProject() {
+    if (!currentProject) return;
+    if (!confirm('Pull latest from origin (fast-forward only)?')) return;
+    try {
+        const res = await fetch(`/api/projects/${currentProject.id}/pull`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) {
+            alert(`Pull failed: ${data.error || 'unknown'}\n\n${data.details || ''}`);
+            return;
+        }
+        alert(`✅ Pulled:\n\n${data.output || 'up to date'}`);
+        await checkSyncStatus();
+    } catch (e) {
+        alert(`Error: ${e.message}`);
+    }
+}
+
 async function cloneProject() {
     if (!currentProject) return;
     
@@ -621,7 +683,20 @@ async function checkSyncStatus() {
                 </div>
             `;
         }
-        
+
+        // Action buttons appropriate to the sync state
+        const actions = [];
+        if (data.status === 'dirty' || data.status === 'unpushed') {
+            const needsCommit = data.status === 'dirty';
+            actions.push(`<button class="btn btn-primary" onclick="showCommitDialog(${needsCommit ? 'true' : 'false'})">💾 Commit ${needsCommit ? '& ' : ''}Push</button>`);
+        }
+        if (data.status === 'behind') {
+            actions.push(`<button class="btn btn-primary" onclick="pullProject()">⬇️ Pull (ff-only)</button>`);
+        }
+        if (actions.length) {
+            statusHTML += `<div style="margin-top: 12px; display: flex; gap: 8px;">${actions.join('')}</div>`;
+        }
+
         statusHTML += `</div>`;
         
         syncStatus.innerHTML = statusHTML;
