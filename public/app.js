@@ -359,10 +359,11 @@ async function showProject(id) {
             readmeSection.style.display = 'none';
         }
         
-        // Render clone/sync buttons
+        // Render clone/sync/launch buttons
         const cloneBtn = document.getElementById('cloneBtn');
         const syncBtn = document.getElementById('syncBtn');
-        
+        const launchBtn = document.getElementById('launchBtn');
+
         if (currentProject.repo_url && !currentProject.local_path) {
             cloneBtn.style.display = 'inline-block';
             syncBtn.style.display = 'none';
@@ -372,6 +373,12 @@ async function showProject(id) {
         } else {
             cloneBtn.style.display = 'none';
             syncBtn.style.display = 'none';
+        }
+
+        // Launch is available when we have something to launch (local or live url)
+        if (launchBtn) {
+            const canLaunch = Boolean(currentProject.local_path || currentProject.live_url);
+            launchBtn.style.display = canLaunch ? 'inline-block' : 'none';
         }
         
         // Render info
@@ -532,6 +539,37 @@ async function updateProject(event) {
         showProject(currentProject.id);
     } catch (error) {
         alert(`Error: ${error.message}`);
+    }
+}
+
+async function launchProject() {
+    if (!currentProject) return;
+
+    const btn = document.getElementById('launchBtn');
+    btn.disabled = true;
+    const originalText = btn.textContent;
+    btn.textContent = 'Launching…';
+
+    try {
+        const res = await fetch(`/api/projects/${currentProject.id}/launch`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Launch failed');
+
+        if (data.type === 'url') {
+            window.open(data.url, '_blank');
+            showToast(`Opened ${data.url}`);
+        } else if (data.type === 'spawned') {
+            const liveNote = data.live_url ? `\nLive URL: ${data.live_url}` : '';
+            alert(`🚀 ${data.command} spawned in:\n${data.cwd}\n(pid ${data.pid})${liveNote}\n\n${data.note || ''}`);
+            if (data.live_url) window.open(data.live_url, '_blank');
+        } else {
+            alert(JSON.stringify(data, null, 2));
+        }
+    } catch (e) {
+        alert(`Error: ${e.message}`);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
     }
 }
 

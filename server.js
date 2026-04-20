@@ -345,6 +345,80 @@ app.get('/api/projects/:id/sync-status', async (req, res) => {
 });
 
 // Clone repo to local
+// Launch the project — opens live_url, or spawns npm run dev / npm start
+app.post('/api/projects/:id/launch', async (req, res) => {
+    try {
+        const { spawn } = require('child_process');
+        const fs = require('fs');
+        const path = require('path');
+
+        const project = db.getProject(parseInt(req.params.id));
+        if (!project) return res.status(404).json({ error: 'Project not found' });
+
+        // No local clone? Fall back to live_url if set.
+        if (!project.local_path || !fs.existsSync(project.local_path)) {
+            if (project.live_url) {
+                return res.json({ type: 'url', url: project.live_url });
+            }
+            return res.status(400).json({ error: 'No local clone and no live URL available' });
+        }
+
+        const cwd = project.local_path;
+        const pkgPath = path.join(cwd, 'package.json');
+
+        if (fs.existsSync(pkgPath)) {
+            let pkg;
+            try {
+                pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+            } catch (e) {
+                return res.status(400).json({ error: 'Invalid package.json: ' + e.message });
+            }
+            const scripts = pkg.scripts || {};
+            const scriptName = scripts.dev ? 'dev' : scripts.start ? 'start' : null;
+            if (!scriptName) {
+                return res.status(400).json({ error: 'package.json has no dev or start script' });
+            }
+            // shell:true lets Windows resolve npm.cmd; detached+unref lets the
+            // dev server outlive launchpad; stdio:'ignore' prevents the parent
+            // buffer from filling and blocking.
+            const child = spawn('npm', ['run', scriptName], {
+                cwd,
+                detached: true,
+                shell: true,
+                stdio: 'ignore'
+            });
+            child.unref();
+
+            db.addUpdate({
+                project_id: project.id,
+                type: 'progress',
+                title: 'Launched',
+                content: `Spawned: npm run ${scriptName} (pid ${child.pid}) in ${cwd}`
+            });
+
+            return res.json({
+                type: 'spawned',
+                pid: child.pid,
+                command: `npm run ${scriptName}`,
+                cwd,
+                live_url: project.live_url || null,
+                note: 'Dev server running in background. Stop via Task Manager / kill PID.'
+            });
+        }
+
+        // No package.json — if the project has a live_url, open that.
+        if (project.live_url) {
+            return res.json({ type: 'url', url: project.live_url });
+        }
+
+        return res.status(400).json({
+            error: 'No recognized launch target (no package.json dev/start, no live_url)'
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Commit + optionally push the project's local clone
 app.post('/api/projects/:id/commit', async (req, res) => {
     try {
