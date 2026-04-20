@@ -78,6 +78,32 @@ h1 {
     border-bottom-color: #60a5fa;
 }
 
+/* Segmented tabs inside modals (Import dialog, etc.) */
+.import-tab {
+    padding: 10px 20px;
+    background: #0f0f0f;
+    border: 1px solid #333;
+    color: #d4d4d4;
+    cursor: pointer;
+    font-size: 0.95rem;
+    font-weight: 500;
+    border-radius: 6px 6px 0 0;
+    transition: all 0.15s;
+    border-bottom: 2px solid transparent;
+}
+
+.import-tab:hover {
+    background: #262626;
+    color: #fff;
+}
+
+.import-tab.active {
+    background: #1e2a44;
+    color: #93c5fd;
+    border-color: #60a5fa;
+    border-bottom-color: #60a5fa;
+}
+
 /* Views */
 .view {
     display: none;
