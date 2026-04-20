@@ -345,6 +345,52 @@ app.get('/api/projects/:id/sync-status', async (req, res) => {
 });
 
 // Clone repo to local
+// Install deps (npm install) for a project's local clone. Blocking — returns
+// once install finishes or fails.
+app.post('/api/projects/:id/install-deps', async (req, res) => {
+    try {
+        const { exec } = require('child_process');
+        const util = require('util');
+        const execPromise = util.promisify(exec);
+        const fs = require('fs');
+        const path = require('path');
+
+        const project = db.getProject(parseInt(req.params.id));
+        if (!project) return res.status(404).json({ error: 'Project not found' });
+        if (!project.local_path || !fs.existsSync(project.local_path)) {
+            return res.status(400).json({ error: 'Repository not cloned locally' });
+        }
+        if (!fs.existsSync(path.join(project.local_path, 'package.json'))) {
+            return res.status(400).json({ error: 'No package.json — nothing to install' });
+        }
+
+        try {
+            const { stdout, stderr } = await execPromise('npm install', {
+                cwd: project.local_path,
+                maxBuffer: 50 * 1024 * 1024
+            });
+            db.addUpdate({
+                project_id: project.id,
+                type: 'progress',
+                title: 'Installed dependencies',
+                content: `npm install completed in ${project.local_path}`
+            });
+            res.json({
+                success: true,
+                output: (stdout + stderr).split('\n').slice(-20).join('\n')
+            });
+        } catch (e) {
+            res.status(500).json({
+                success: false,
+                error: 'npm install failed',
+                output: (e.stderr || e.message || '').split('\n').slice(-20).join('\n')
+            });
+        }
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Launch the project — opens live_url, or spawns npm run dev / npm start
 app.post('/api/projects/:id/launch', async (req, res) => {
     try {
@@ -377,6 +423,18 @@ app.post('/api/projects/:id/launch', async (req, res) => {
             const scriptName = scripts.dev ? 'dev' : scripts.start ? 'start' : null;
             if (!scriptName) {
                 return res.status(400).json({ error: 'package.json has no dev or start script' });
+            }
+            // Catch the common case: deps not installed. A detached spawn
+            // would silently fail otherwise — the user clicks Launch, gets
+            // a PID, but Next.js never boots.
+            const nodeModules = path.join(cwd, 'node_modules');
+            if (!fs.existsSync(nodeModules)) {
+                return res.status(409).json({
+                    type: 'install_needed',
+                    error: 'Dependencies not installed — run `npm install` first',
+                    suggestion: `cd ${cwd} && npm install`,
+                    cwd
+                });
             }
             // shell:true lets Windows resolve npm.cmd; detached+unref lets the
             // dev server outlive launchpad; stdio:'ignore' prevents the parent

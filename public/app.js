@@ -542,6 +542,30 @@ async function updateProject(event) {
     }
 }
 
+async function runInstallDeps() {
+    if (!currentProject) return;
+    const btn = document.getElementById('launchBtn');
+    btn.disabled = true;
+    const originalText = btn.textContent;
+    btn.textContent = 'Installing deps…';
+    try {
+        const res = await fetch(`/api/projects/${currentProject.id}/install-deps`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) {
+            alert(`npm install failed:\n\n${data.output || data.error || ''}`);
+            return;
+        }
+        alert(`✅ Dependencies installed.\n\nTail:\n${data.output}`);
+        // Try launching now that deps are present
+        await launchProject();
+    } catch (e) {
+        alert(`Error: ${e.message}`);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+    }
+}
+
 async function launchProject() {
     if (!currentProject) return;
 
@@ -553,6 +577,14 @@ async function launchProject() {
     try {
         const res = await fetch(`/api/projects/${currentProject.id}/launch`, { method: 'POST' });
         const data = await res.json();
+
+        // Specific handling for "deps not installed" so the user can install inline
+        if (res.status === 409 && data.type === 'install_needed') {
+            const go = confirm(`Dependencies not installed.\n\nRun npm install in:\n${data.cwd}\n\nThis may take a minute.`);
+            if (go) await runInstallDeps();
+            return;
+        }
+
         if (!res.ok) throw new Error(data.error || 'Launch failed');
 
         if (data.type === 'url') {
