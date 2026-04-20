@@ -9,8 +9,24 @@ const HOST = '0.0.0.0';
 // Initialize database
 const db = new LaunchpadDB();
 
-// GitHub client (will use env var or user-provided token)
+// GitHub client — loaded from settings table on boot, or env var fallback
 let octokit = null;
+
+function initOctokit() {
+    const pat = db.getSetting('github_pat') || process.env.GITHUB_TOKEN;
+    if (pat) {
+        octokit = new Octokit({ auth: pat });
+        return true;
+    }
+    return false;
+}
+
+// Derive the clone base directory (Settings > env > hardcoded default)
+function getCloneBaseDir() {
+    return db.getSetting('clone_base_dir') || process.env.CLONE_BASE_DIR || '/home/bfoster';
+}
+
+initOctokit();
 
 // Middleware
 app.use(express.static('public'));
@@ -345,9 +361,9 @@ app.post('/api/projects/:id/clone', async (req, res) => {
             return res.status(400).json({ error: 'Project has no repository URL' });
         }
         
-        // Determine target directory - all projects go to /home/bfoster/<project>
-        // On Windows this resolves to C:\home\bfoster\<project>, mirroring Beelink layout.
-        const baseDir = '/home/bfoster';
+        // Determine target directory — Settings > env > default '/home/bfoster'.
+        // On Windows '/home/bfoster' resolves to C:\home\bfoster, mirroring Beelink layout.
+        const baseDir = getCloneBaseDir();
         const targetDir = path.join(baseDir, project.name);
         
         // Check if already cloned
@@ -387,11 +403,71 @@ app.post('/api/github/token', (req, res) => {
         if (!token) {
             return res.status(400).json({ error: 'Token required' });
         }
-        
+
+        // Persist to settings table so the token survives server restarts
+        db.setSetting('github_pat', token);
         octokit = new Octokit({ auth: token });
         res.json({ success: true });
     } catch (error) {
         res.status(400).json({ error: error.message });
+    }
+});
+
+// ========== SETTINGS ENDPOINTS ==========
+
+// Get all settings (masks github_pat — only returns a hint that it's set)
+app.get('/api/settings', (req, res) => {
+    try {
+        const all = db.getAllSettings();
+        const result = {};
+        all.forEach(s => {
+            if (s.key === 'github_pat') {
+                result[s.key] = { set: !!s.value, preview: s.value ? `${s.value.slice(0, 7)}…` : null };
+            } else {
+                result[s.key] = s.value;
+            }
+            result[`${s.key}_updated_at`] = s.updated_at;
+        });
+        // Always include derived clone base dir so the UI can show the effective value.
+        result.clone_base_dir_effective = getCloneBaseDir();
+        res.json(result);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Update a single setting
+app.put('/api/settings/:key', (req, res) => {
+    try {
+        const { key } = req.params;
+        const { value } = req.body;
+        const allowed = new Set(['github_pat', 'clone_base_dir']);
+        if (!allowed.has(key)) {
+            return res.status(400).json({ error: `Unknown setting: ${key}` });
+        }
+        if (value === null || value === '') {
+            db.deleteSetting(key);
+            if (key === 'github_pat') octokit = null;
+        } else {
+            db.setSetting(key, value);
+            if (key === 'github_pat') octokit = new Octokit({ auth: value });
+        }
+        res.json({ success: true, key, effective_clone_base_dir: getCloneBaseDir() });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Verify the stored PAT by hitting /user
+app.post('/api/settings/test-github', async (req, res) => {
+    try {
+        if (!octokit) {
+            return res.status(400).json({ ok: false, error: 'No GitHub token set' });
+        }
+        const { data } = await octokit.users.getAuthenticated();
+        res.json({ ok: true, login: data.login, scopes_note: 'token valid' });
+    } catch (error) {
+        res.status(400).json({ ok: false, error: error.message });
     }
 });
 
@@ -475,10 +551,11 @@ app.post('/api/github/import-url', async (req, res) => {
         
         const [, owner, repo] = match;
         const repoName = repo.replace(/\.git$/, '');
-        
-        // Fetch repo info from public API (using octokit without auth)
-        const publicOctokit = new Octokit();
-        const { data: repoData } = await publicOctokit.repos.get({
+
+        // Use the authenticated client when a PAT is stored so private repos
+        // are visible; otherwise fall back to an anonymous client for public repos.
+        const client = octokit || new Octokit();
+        const { data: repoData } = await client.repos.get({
             owner,
             repo: repoName
         });
@@ -492,7 +569,7 @@ app.post('/api/github/import-url', async (req, res) => {
         // Fetch README
         let readme = null;
         try {
-            const { data: readmeData } = await publicOctokit.repos.getReadme({
+            const { data: readmeData } = await client.repos.getReadme({
                 owner,
                 repo: repoName
             });

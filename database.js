@@ -53,7 +53,37 @@ class LaunchpadDB {
             CREATE INDEX IF NOT EXISTS idx_updates_project ON updates(project_id);
             CREATE INDEX IF NOT EXISTS idx_metrics_project ON metrics(project_id);
             CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
+
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at INTEGER DEFAULT (unixepoch())
+            );
         `);
+    }
+
+    // ========== SETTINGS ==========
+
+    getSetting(key) {
+        const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+        return row ? row.value : null;
+    }
+
+    setSetting(key, value) {
+        this.db.prepare(`
+            INSERT INTO settings (key, value, updated_at) VALUES (?, ?, unixepoch())
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = unixepoch()
+        `).run(key, value);
+        return { key, value };
+    }
+
+    getAllSettings() {
+        return this.db.prepare('SELECT key, value, updated_at FROM settings').all();
+    }
+
+    deleteSetting(key) {
+        const result = this.db.prepare('DELETE FROM settings WHERE key = ?').run(key);
+        return result.changes > 0;
     }
 
     // ========== PROJECTS ==========
