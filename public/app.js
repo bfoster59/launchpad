@@ -193,6 +193,7 @@ function showToast(msg) {
 }
 
 function goBack() {
+    stopRunningPoll();
     showView(previousView);
 }
 
@@ -427,6 +428,9 @@ async function showProject(id) {
         if (installDepsBtn) {
             installDepsBtn.style.display = currentProject.local_path ? 'inline-block' : 'none';
         }
+
+        // Kick off running-server polling so Stop button + URL chip update live
+        startRunningPoll();
         
         // Render info
         document.getElementById('projectInfo').innerHTML = `
@@ -597,6 +601,77 @@ async function updateProject(event) {
     }
 }
 
+// Poll the running-server endpoint while the detail view is open, updating
+// the URL chip + Launch/Stop button state. Cleared when leaving the view.
+let _runningPollTimer = null;
+let _lastDetectedUrl = null;
+
+async function refreshRunningState() {
+    if (!currentProject) return;
+    try {
+        const r = await fetch(`/api/projects/${currentProject.id}/running`);
+        const data = await r.json();
+        const launchBtn = document.getElementById('launchBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const urlChip = document.getElementById('detectedUrl');
+
+        if (data.running) {
+            if (launchBtn) launchBtn.style.display = 'none';
+            if (stopBtn) stopBtn.style.display = 'inline-block';
+            if (data.url) {
+                if (urlChip) {
+                    urlChip.innerHTML = `🟢 Running: <a href="${data.url}" target="_blank" style="color: #93c5fd;">${data.url}</a> (pid ${data.pid})`;
+                    urlChip.style.display = 'inline';
+                }
+                // Auto-open browser the first time we learn the URL for this session
+                if (_lastDetectedUrl !== data.url) {
+                    _lastDetectedUrl = data.url;
+                    window.open(data.url, '_blank');
+                }
+            } else {
+                if (urlChip) {
+                    urlChip.textContent = `⏳ Running (pid ${data.pid}) — waiting for URL…`;
+                    urlChip.style.display = 'inline';
+                }
+            }
+        } else {
+            // Not running — restore the default button visibility via showProject's rules
+            const canLaunch = currentProject && (currentProject.local_path || currentProject.live_url);
+            if (launchBtn) launchBtn.style.display = canLaunch ? 'inline-block' : 'none';
+            if (stopBtn) stopBtn.style.display = 'none';
+            if (urlChip) urlChip.style.display = 'none';
+            _lastDetectedUrl = null;
+        }
+    } catch (e) { /* non-fatal */ }
+}
+
+function startRunningPoll() {
+    stopRunningPoll();
+    refreshRunningState();
+    _runningPollTimer = setInterval(refreshRunningState, 2000);
+}
+
+function stopRunningPoll() {
+    if (_runningPollTimer) {
+        clearInterval(_runningPollTimer);
+        _runningPollTimer = null;
+    }
+}
+
+async function stopDevServer() {
+    if (!currentProject) return;
+    if (!confirm('Stop the running dev server?')) return;
+    try {
+        const r = await fetch(`/api/projects/${currentProject.id}/stop`, { method: 'POST' });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'Stop failed');
+        showToast(`Stopped pid ${data.pid}`);
+        await refreshRunningState();
+    } catch (e) {
+        alert(`Error: ${e.message}`);
+    }
+}
+
 async function runInstallDeps() {
     if (!currentProject) return;
     const btn = document.getElementById('launchBtn');
@@ -646,9 +721,11 @@ async function launchProject() {
             window.open(data.url, '_blank');
             showToast(`Opened ${data.url}`);
         } else if (data.type === 'spawned') {
-            const liveNote = data.live_url ? `\nLive URL: ${data.live_url}` : '';
-            alert(`🚀 ${data.command} spawned in:\n${data.cwd}\n(pid ${data.pid})${liveNote}\n\n${data.note || ''}`);
+            showToast(`${data.command} started (pid ${data.pid}) — waiting for URL…`);
             if (data.live_url) window.open(data.live_url, '_blank');
+            // Kick off poll so the URL chip + Stop button appear immediately,
+            // and auto-opens the browser once the dev server prints its URL.
+            startRunningPoll();
         } else {
             alert(JSON.stringify(data, null, 2));
         }

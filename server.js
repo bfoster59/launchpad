@@ -479,6 +479,64 @@ app.post('/api/projects/:id/install-deps', async (req, res) => {
     }
 });
 
+// In-memory map of spawned dev servers: project_id -> { pid, command, cwd,
+// url, startedAt, stdoutTail, child }. Lost on launchpad restart (iteration 2
+// could persist PIDs and reconcile on boot).
+const runningServers = new Map();
+
+// Best-effort URL extraction from dev-server stdout. Matches 'Local: http://...'
+// (Next.js), 'http://localhost:NNNN' (Vite, CRA), etc. Avoids Git URLs.
+function extractUrl(text) {
+    const urlMatch = text.match(/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?\S*/i);
+    if (urlMatch) return urlMatch[0].replace(/[.,;:)]+$/, '');
+    const portMatch = text.match(/localhost:(\d+)/i);
+    if (portMatch) return `http://localhost:${portMatch[1]}`;
+    return null;
+}
+
+// Get the running-server state for a project (polled by the UI for URL detection)
+app.get('/api/projects/:id/running', (req, res) => {
+    const id = parseInt(req.params.id);
+    const entry = runningServers.get(id);
+    if (!entry) return res.json({ running: false });
+    res.json({
+        running: true,
+        pid: entry.pid,
+        url: entry.url,
+        command: entry.command,
+        cwd: entry.cwd,
+        startedAt: entry.startedAt,
+        stdoutTail: entry.stdoutTail ? entry.stdoutTail.split('\n').slice(-10).join('\n') : ''
+    });
+});
+
+// Stop a running dev server spawned via /launch.
+app.post('/api/projects/:id/stop', (req, res) => {
+    const { spawn } = require('child_process');
+    const id = parseInt(req.params.id);
+    const entry = runningServers.get(id);
+    if (!entry) return res.status(404).json({ error: 'Not running in this launchpad instance' });
+
+    if (process.platform === 'win32') {
+        // /T kills the process tree (cmd wrapper + npm + node dev server).
+        const killer = spawn('taskkill', ['/F', '/T', '/PID', String(entry.pid)], {
+            detached: true, stdio: 'ignore'
+        });
+        killer.unref();
+    } else {
+        // Negative PID kills the process group on POSIX.
+        try { process.kill(-entry.pid); } catch (e) { try { process.kill(entry.pid); } catch (e2) { /* ignore */ } }
+    }
+    runningServers.delete(id);
+    db.addUpdate({
+        project_id: id,
+        type: 'progress',
+        title: 'Stopped',
+        content: `Killed dev server pid ${entry.pid}`
+    });
+    res.json({ success: true, pid: entry.pid });
+});
+
 // Launch the project — opens live_url, or spawns npm run dev / npm start
 app.post('/api/projects/:id/launch', async (req, res) => {
     try {
@@ -524,16 +582,56 @@ app.post('/api/projects/:id/launch', async (req, res) => {
                     cwd
                 });
             }
-            // shell:true lets Windows resolve npm.cmd; detached+unref lets the
-            // dev server outlive launchpad; stdio:'ignore' prevents the parent
-            // buffer from filling and blocking.
+            // Kill any prior entry for this project (stale PID would confuse UI)
+            if (runningServers.has(project.id)) {
+                const prev = runningServers.get(project.id);
+                try {
+                    if (process.platform === 'win32') {
+                        spawn('taskkill', ['/F', '/T', '/PID', String(prev.pid)], { detached: true, stdio: 'ignore' }).unref();
+                    } else {
+                        process.kill(-prev.pid);
+                    }
+                } catch (e) { /* ignore */ }
+                runningServers.delete(project.id);
+            }
+
+            // shell:true lets Windows resolve npm.cmd; detached+unref so the
+            // process isn't in the event-loop critical path; stdio pipes so we
+            // can observe stdout for port detection.
             const child = spawn('npm', ['run', scriptName], {
                 cwd,
                 detached: true,
                 shell: true,
-                stdio: 'ignore'
+                stdio: ['ignore', 'pipe', 'pipe']
             });
-            child.unref();
+
+            const entry = {
+                pid: child.pid,
+                command: `npm run ${scriptName}`,
+                cwd,
+                url: null,
+                startedAt: Date.now(),
+                stdoutTail: '',
+                child
+            };
+            runningServers.set(project.id, entry);
+
+            // Capture stdout/stderr to extract the URL the dev server prints at startup
+            const readChunk = (chunk) => {
+                const text = chunk.toString();
+                entry.stdoutTail = (entry.stdoutTail + text).slice(-8192);
+                if (!entry.url) {
+                    const u = extractUrl(text);
+                    if (u) entry.url = u;
+                }
+            };
+            if (child.stdout) child.stdout.on('data', readChunk);
+            if (child.stderr) child.stderr.on('data', readChunk);
+            child.on('exit', (code) => {
+                const e = runningServers.get(project.id);
+                if (e && e.pid === child.pid) runningServers.delete(project.id);
+            });
+            child.on('error', (err) => console.error('spawn error:', err.message));
 
             db.addUpdate({
                 project_id: project.id,
@@ -548,7 +646,7 @@ app.post('/api/projects/:id/launch', async (req, res) => {
                 command: `npm run ${scriptName}`,
                 cwd,
                 live_url: project.live_url || null,
-                note: 'Dev server running in background. Stop via Task Manager / kill PID.'
+                note: 'Dev server running. URL will appear once detected.'
             });
         }
 
