@@ -44,10 +44,13 @@ function showView(viewName) {
         navTab.classList.add('active');
     }
     
+    // Legacy alias — old GitHubNeo tab now folds into GitHub
+    if (viewName === 'githubNeo') viewName = 'github';
+
     // Load data for view
     if (viewName === 'discover') {
         loadTrending();
-    } else if (viewName === 'githubNeo') {
+    } else if (viewName === 'github') {
         loadNeoView();
     } else if (viewName === 'settings') {
         loadSettings();
@@ -281,7 +284,7 @@ async function loadProjects() {
         projects = await response.json();
         renderDashboard();
         renderMyProjects();
-        renderGitHubProjects();
+        // GitHub tab renders via loadNeoView() on tab activation (merged view).
     } catch (error) {
         console.error('Error loading projects:', error);
     }
@@ -339,13 +342,8 @@ function renderMyProjects() {
         : '<div class="empty-state">No projects yet. Create your first one!</div>';
 }
 
-function renderGitHubProjects() {
-    const githubProjects = projects.filter(p => p.source === 'github');
-    
-    document.getElementById('githubProjectsList').innerHTML = githubProjects.length > 0
-        ? githubProjects.map(p => renderProjectCard(p)).join('')
-        : '<div class="empty-state">No GitHub repos imported yet</div>';
-}
+// renderGitHubProjects — removed 2026-04-20 when GitHub + GitHubNeo tabs merged.
+// GitHub view now renders via loadNeoView (Popular cards + filterable list).
 
 function renderProjectCard(p) {
     const categoryIcon = getCategoryIcon(p.category);
