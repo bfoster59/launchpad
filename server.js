@@ -539,9 +539,11 @@ app.post('/api/projects/:id/clone', async (req, res) => {
             return res.status(409).json({ error: 'Already cloned', local_path: targetDir });
         }
         
-        // Clone the repo
+        // Clone the repo — use fs.mkdirSync for cross-platform dir creation;
+        // `mkdir -p` is Unix-only and Windows cmd tries to create a literal
+        // folder named '-p'.
         const repoDir = path.dirname(targetDir);
-        await execPromise(`mkdir -p "${repoDir}"`);
+        fs.mkdirSync(repoDir, { recursive: true });
         await execPromise(`git clone "${project.repo_url}" "${targetDir}"`);
         
         // Update project with local path
