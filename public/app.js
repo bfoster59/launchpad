@@ -399,10 +399,12 @@ async function showProject(id) {
             readmeSection.style.display = 'none';
         }
         
-        // Render clone/sync/launch buttons
+        // Render clone/sync/launch/commit/install-deps buttons based on state
         const cloneBtn = document.getElementById('cloneBtn');
         const syncBtn = document.getElementById('syncBtn');
         const launchBtn = document.getElementById('launchBtn');
+        const commitBtn = document.getElementById('commitBtn');
+        const installDepsBtn = document.getElementById('installDepsBtn');
 
         if (currentProject.repo_url && !currentProject.local_path) {
             cloneBtn.style.display = 'inline-block';
@@ -415,10 +417,15 @@ async function showProject(id) {
             syncBtn.style.display = 'none';
         }
 
-        // Launch is available when we have something to launch (local or live url)
         if (launchBtn) {
             const canLaunch = Boolean(currentProject.local_path || currentProject.live_url);
             launchBtn.style.display = canLaunch ? 'inline-block' : 'none';
+        }
+        if (commitBtn) {
+            commitBtn.style.display = currentProject.local_path ? 'inline-block' : 'none';
+        }
+        if (installDepsBtn) {
+            installDepsBtn.style.display = currentProject.local_path ? 'inline-block' : 'none';
         }
         
         // Render info
@@ -534,6 +541,11 @@ async function editProject() {
                     <input type="url" name="live_url" value="${currentProject.live_url || ''}" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
                 </div>
                 <div style="margin-bottom: 16px;">
+                    <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Local Path</label>
+                    <input type="text" name="local_path" value="${(currentProject.local_path || '').replace(/"/g, '&quot;')}" placeholder="e.g., C:\\home\\bfoster\\my-project" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: monospace;">
+                    <div style="color: #666; font-size: 0.8rem; margin-top: 4px;">Where the local clone lives. Leave blank if not cloned yet.</div>
+                </div>
+                <div style="margin-bottom: 16px;">
                     <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">README (optional)</label>
                     <textarea name="readme" rows="8" placeholder="Paste or edit README content here..." style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: monospace; font-size: 0.9rem;">${(currentProject.readme || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</textarea>
                 </div>
@@ -563,6 +575,7 @@ async function updateProject(event) {
         category: formData.get('category'),
         repo_url: formData.get('repo_url') || null,
         live_url: formData.get('live_url') || null,
+        local_path: formData.get('local_path') || null,
         readme: formData.get('readme') || null
     };
     
@@ -647,48 +660,93 @@ async function launchProject() {
     }
 }
 
-async function showCommitDialog(needsCommit) {
-    if (!currentProject) return;
+// Legacy shim — inline 'Commit Push' buttons on the sync-status card call this.
+// Forwards to the proper modal with sensible preselection.
+function showCommitDialog(needsCommit) {
+    openCommitModal({ addAll: !!needsCommit, push: true });
+}
 
-    let message = null;
-    if (needsCommit) {
-        message = prompt('Commit message:');
-        if (message === null) return; // user cancelled
-        message = message.trim();
-        if (!message) {
-            alert('Commit message cannot be empty.');
-            return;
-        }
-    } else {
-        if (!confirm('Push existing commits to origin?')) return;
+function openCommitModal(opts) {
+    if (!currentProject) return;
+    const options = opts || {};
+    document.getElementById('commitModal').style.display = 'block';
+    const ctxEl = document.getElementById('commitContext');
+    ctxEl.textContent = `${currentProject.name} — ${currentProject.local_path || 'no local clone'}`;
+    document.getElementById('commitMessage').value = '';
+    document.getElementById('commitAddAll').checked = options.addAll !== false;
+    document.getElementById('commitPush').checked = options.push !== false;
+    document.getElementById('commitResult').style.display = 'none';
+    document.getElementById('commitResult').textContent = '';
+    document.getElementById('commitSubmitBtn').disabled = false;
+    document.getElementById('commitSubmitBtn').textContent = 'Commit';
+    setTimeout(() => document.getElementById('commitMessage').focus(), 50);
+}
+
+function closeCommitModal() {
+    document.getElementById('commitModal').style.display = 'none';
+}
+
+async function submitCommit() {
+    if (!currentProject) return;
+    const message = document.getElementById('commitMessage').value.trim();
+    const addAll = document.getElementById('commitAddAll').checked;
+    const push = document.getElementById('commitPush').checked;
+
+    if (addAll && !message) {
+        alert('Commit message is required when staging new changes.');
+        return;
     }
+    if (!addAll && !push) {
+        alert('Nothing to do — enable either "stage changes" or "push".');
+        return;
+    }
+
+    const submitBtn = document.getElementById('commitSubmitBtn');
+    const resultEl = document.getElementById('commitResult');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Working…';
+    resultEl.style.display = 'block';
+    resultEl.textContent = 'Working…';
 
     try {
         const res = await fetch(`/api/projects/${currentProject.id}/commit`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: message || '', push: true, addAll: needsCommit })
+            body: JSON.stringify({ message, push, addAll })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Commit failed');
 
-        // Summarize result
         const parts = [];
         if (data.results.commit) {
             if (data.results.commit.ok) parts.push('✅ Committed');
             else if (data.results.commit.skipped) parts.push('⏭ Nothing to commit');
-            else parts.push(`❌ Commit failed: ${data.results.commit.error}`);
+            else parts.push(`❌ Commit failed:\n${data.results.commit.error}`);
         }
         if (data.results.push) {
-            if (data.results.push.ok) parts.push('✅ Pushed to origin');
-            else parts.push(`❌ Push failed: ${data.results.push.error}`);
+            if (data.results.push.ok) parts.push('✅ Pushed to origin\n' + (data.results.push.output || ''));
+            else parts.push(`❌ Push failed:\n${data.results.push.error}`);
         }
-        alert(parts.join('\n'));
+        resultEl.textContent = parts.join('\n\n') || 'Done.';
 
-        // Refresh sync status to reflect new state
-        await checkSyncStatus();
+        // If at least one step succeeded, refresh sync + schedule auto-close
+        const anySuccess = (data.results.commit && data.results.commit.ok) ||
+                           (data.results.push && data.results.push.ok) ||
+                           (data.results.commit && data.results.commit.skipped);
+        if (anySuccess) {
+            setTimeout(() => {
+                closeCommitModal();
+                // If the sync panel is visible, refresh it
+                if (document.getElementById('syncStatus') && document.getElementById('syncStatus').style.display !== 'none') {
+                    checkSyncStatus();
+                }
+            }, 1500);
+        }
     } catch (e) {
-        alert(`Error: ${e.message}`);
+        resultEl.textContent = `❌ ${e.message}`;
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Commit';
     }
 }
 
@@ -825,9 +883,22 @@ async function checkSyncStatus() {
 
 // ========== BULK IMPORT ==========
 
-function showBulkImport() {
+async function showBulkImport() {
     document.getElementById('bulkImportModal').style.display = 'block';
     showImportTab('url'); // Default to URL tab
+    // If a PAT is stored in Settings, prefill the field so users don't re-paste.
+    try {
+        const s = await (await fetch('/api/settings')).json();
+        const input = document.getElementById('githubToken');
+        if (s.github_pat && s.github_pat.set && !input.value) {
+            // Server hides the real token (only returns a 7-char preview). Mark the
+            // field so loadGitHubRepos knows to use the stored PAT rather than
+            // whatever's in the field.
+            input.value = '__USE_STORED__';
+            input.placeholder = `Using stored token (${s.github_pat.preview}) — edit to override`;
+            input.dataset.usesStored = 'true';
+        }
+    } catch (e) { /* non-fatal */ }
 }
 
 function hideBulkImport() {
@@ -860,23 +931,28 @@ async function importByUrl() {
 }
 
 async function loadGitHubRepos() {
-    const token = document.getElementById('githubToken').value.trim();
-    if (!token) {
+    const input = document.getElementById('githubToken');
+    const rawToken = input.value.trim();
+    const usingStored = input.dataset.usesStored === 'true' && rawToken === '__USE_STORED__';
+
+    if (!rawToken) {
         alert('Enter your GitHub token');
         return;
     }
-    
+
     try {
-        // Set the token
-        const tokenResponse = await fetch('/api/github/token', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token })
-        });
-        
-        if (!tokenResponse.ok) {
-            const errorData = await tokenResponse.json().catch(() => ({ error: 'Invalid token' }));
-            throw new Error(errorData.error || 'Invalid token');
+        // If the user didn't override the stored token, the server already has it
+        // loaded from Settings — skip the re-save round-trip.
+        if (!usingStored) {
+            const tokenResponse = await fetch('/api/github/token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: rawToken })
+            });
+            if (!tokenResponse.ok) {
+                const errorData = await tokenResponse.json().catch(() => ({ error: 'Invalid token' }));
+                throw new Error(errorData.error || 'Invalid token');
+            }
         }
         
         // Load repos
