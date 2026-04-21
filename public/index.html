@@ -324,7 +324,26 @@
                         <h3>📝 Build Log</h3>
                         <div id="updatesList"></div>
                     </div>
-                    
+
+                    <div id="issuesSection" class="detail-section" style="display: none;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                            <h3 style="margin: 0;">🐛 Issues <span id="issuesCount" style="color: #888; font-size: 0.85rem;"></span></h3>
+                            <div style="display: flex; gap: 4px;">
+                                <button id="issuesOpenTab" class="import-tab active" onclick="loadIssues('open')">Open</button>
+                                <button id="issuesClosedTab" class="import-tab" onclick="loadIssues('closed')">Closed</button>
+                            </div>
+                        </div>
+                        <div id="issuesList"><div class="loading">Loading…</div></div>
+                    </div>
+
+                    <div id="commitsSection" class="detail-section" style="display: none;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                            <h3 style="margin: 0;">📜 Recent Commits</h3>
+                            <button class="btn btn-sm btn-secondary" onclick="loadCommits()">🔄 Refresh</button>
+                        </div>
+                        <div id="commitsList"><div class="loading">Loading…</div></div>
+                    </div>
+
                     <div id="readmeSection" class="detail-section" style="display: none;">
                         <h3>📄 README</h3>
                         <pre id="readmeContent" class="readme"></pre>

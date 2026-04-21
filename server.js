@@ -363,6 +363,105 @@ app.get('/api/projects/:id/sync-status', async (req, res) => {
 });
 
 // Clone repo to local
+// ========== GITHUB READ-ONLY HELPERS (issues, commits, branches) ==========
+
+// Extract owner/repo from a github URL
+function parseRepoUrl(url) {
+    const m = /github\.com[:/]+([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(url || '');
+    if (!m) return null;
+    return { owner: m[1], repo: m[2] };
+}
+
+// List recent issues on the repo (filters state)
+app.get('/api/projects/:id/issues', async (req, res) => {
+    try {
+        const project = db.getProject(parseInt(req.params.id));
+        if (!project) return res.status(404).json({ error: 'Project not found' });
+        const parsed = parseRepoUrl(project.repo_url);
+        if (!parsed) return res.status(400).json({ error: 'No parseable GitHub URL on this project' });
+
+        const state = ['open', 'closed', 'all'].includes(req.query.state) ? req.query.state : 'open';
+        const client = octokit || new Octokit();
+        const { data } = await client.issues.listForRepo({
+            owner: parsed.owner,
+            repo: parsed.repo,
+            state,
+            per_page: 30
+        });
+
+        // Octokit returns PRs in issues feed too — filter them out
+        const issues = data.filter(i => !i.pull_request).map(i => ({
+            number: i.number,
+            title: i.title,
+            state: i.state,
+            html_url: i.html_url,
+            user: i.user ? i.user.login : null,
+            created_at: i.created_at,
+            comments: i.comments,
+            labels: (i.labels || []).map(l => ({ name: l.name || l, color: l.color }))
+        }));
+        res.json({ state, count: issues.length, issues });
+    } catch (error) {
+        const msg = error.status === 404 ? 'Repository not found or private without token' : error.message;
+        res.status(error.status || 500).json({ error: msg });
+    }
+});
+
+// List recent commits on the default branch
+app.get('/api/projects/:id/commits', async (req, res) => {
+    try {
+        const project = db.getProject(parseInt(req.params.id));
+        if (!project) return res.status(404).json({ error: 'Project not found' });
+        const parsed = parseRepoUrl(project.repo_url);
+        if (!parsed) return res.status(400).json({ error: 'No parseable GitHub URL on this project' });
+
+        const limit = Math.min(parseInt(req.query.limit) || 10, 30);
+        const client = octokit || new Octokit();
+        const { data } = await client.repos.listCommits({
+            owner: parsed.owner,
+            repo: parsed.repo,
+            per_page: limit
+        });
+
+        const commits = data.map(c => ({
+            sha: c.sha,
+            short: c.sha.substring(0, 7),
+            message: (c.commit.message || '').split('\n')[0],
+            author: c.commit.author ? c.commit.author.name : null,
+            author_login: c.author ? c.author.login : null,
+            date: c.commit.author ? c.commit.author.date : null,
+            html_url: c.html_url
+        }));
+        res.json({ count: commits.length, commits });
+    } catch (error) {
+        const msg = error.status === 404 ? 'Repository not found or private without token' : error.message;
+        res.status(error.status || 500).json({ error: msg });
+    }
+});
+
+// List branches on the repo (useful for future branch switcher)
+app.get('/api/projects/:id/branches', async (req, res) => {
+    try {
+        const project = db.getProject(parseInt(req.params.id));
+        if (!project) return res.status(404).json({ error: 'Project not found' });
+        const parsed = parseRepoUrl(project.repo_url);
+        if (!parsed) return res.status(400).json({ error: 'No parseable GitHub URL on this project' });
+
+        const client = octokit || new Octokit();
+        const { data } = await client.repos.listBranches({
+            owner: parsed.owner,
+            repo: parsed.repo,
+            per_page: 50
+        });
+        res.json({
+            count: data.length,
+            branches: data.map(b => ({ name: b.name, protected: b.protected, sha: b.commit.sha }))
+        });
+    } catch (error) {
+        res.status(error.status || 500).json({ error: error.message });
+    }
+});
+
 // ========== UTILITY: Open terminal / folder in the project's local_path ==========
 
 // Resolve the user's preferred terminal command template. Settings > env > platform default.

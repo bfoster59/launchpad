@@ -268,7 +268,7 @@ async function saveProject(event) {
         
         if (!response.ok) throw new Error('Failed to create project');
         
-        alert('Project created!');
+        showToast('✅ Project created');
         loadProjects();
         showView('myProjects');
     } catch (error) {
@@ -460,6 +460,11 @@ async function showProject(id) {
 
         // Kick off running-server polling so Stop button + URL chip update live
         startRunningPoll();
+
+        // Load GitHub-side data (issues + commits) in parallel when the repo
+        // has a github URL. Sections hide themselves if there's no repo.
+        loadIssues('open');
+        loadCommits();
         
         // Render info
         document.getElementById('projectInfo').innerHTML = `
@@ -653,7 +658,7 @@ async function updateProject(event) {
         
         if (!response.ok) throw new Error('Failed to update project');
         
-        alert('Project updated!');
+        showToast('✅ Project updated');
         _restoreDetailFromBackup();
         loadProjects();
         showProject(currentProject.id);
@@ -746,7 +751,7 @@ async function runInstallDeps() {
             alert(`npm install failed:\n\n${data.output || data.error || ''}`);
             return;
         }
-        alert(`✅ Dependencies installed.\n\nTail:\n${data.output}`);
+        showToast('✅ Dependencies installed');
         // Try launching now that deps are present
         await launchProject();
     } catch (e) {
@@ -925,7 +930,7 @@ async function cloneProject() {
             throw new Error(data.error || 'Failed to clone');
         }
         
-        alert(`Cloned successfully to: ${data.local_path}`);
+        showToast(`✅ Cloned to ${data.local_path}`);
         showProject(currentProject.id); // Reload
     } catch (error) {
         alert(`Error: ${error.message}`);
@@ -1413,6 +1418,96 @@ function copyToClipboard(text, element) {
     });
 }
 
+// ========== ISSUES + COMMITS (GitHub read-only) ==========
+
+async function loadIssues(state) {
+    if (!currentProject || !currentProject.repo_url) {
+        const s = document.getElementById('issuesSection');
+        if (s) s.style.display = 'none';
+        return;
+    }
+    document.getElementById('issuesSection').style.display = 'block';
+    document.getElementById('issuesOpenTab').classList.toggle('active', state === 'open');
+    document.getElementById('issuesClosedTab').classList.toggle('active', state === 'closed');
+
+    const list = document.getElementById('issuesList');
+    list.innerHTML = '<div class="loading">Loading…</div>';
+    try {
+        const res = await fetch(`/api/projects/${currentProject.id}/issues?state=${state}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Issues fetch failed');
+
+        document.getElementById('issuesCount').textContent = `(${data.count})`;
+        if (data.issues.length === 0) {
+            list.innerHTML = `<div class="empty-state">No ${state} issues</div>`;
+            return;
+        }
+        list.innerHTML = data.issues.map(i => {
+            const stateColor = i.state === 'open' ? '#22c55e' : '#8b5cf6';
+            const stateIcon = i.state === 'open' ? '🟢' : '🟣';
+            const labels = (i.labels || []).map(l => `<span style="background: #${l.color || '888'}22; color: #${l.color || 'ccc'}; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem;">${l.name}</span>`).join(' ');
+            return `
+                <div class="update-item" style="display: flex; justify-content: space-between; align-items: start; gap: 12px;">
+                    <div style="flex: 1;">
+                        <div class="update-title">
+                            <a href="${i.html_url}" target="_blank" style="color: #93c5fd; text-decoration: none;">
+                                ${stateIcon} #${i.number} · ${i.title}
+                            </a>
+                        </div>
+                        <div style="font-size: 0.8rem; color: #888; margin-top: 4px;">
+                            by ${i.user || 'unknown'} · ${formatDate(new Date(i.created_at).getTime() / 1000)} · 💬 ${i.comments}
+                        </div>
+                        ${labels ? `<div style="margin-top: 6px;">${labels}</div>` : ''}
+                    </div>
+                </div>
+            `;
+        }).join('');
+    } catch (e) {
+        list.innerHTML = `<div class="empty-state">⚠ ${e.message}</div>`;
+    }
+}
+
+async function loadCommits() {
+    if (!currentProject || !currentProject.repo_url) {
+        const s = document.getElementById('commitsSection');
+        if (s) s.style.display = 'none';
+        return;
+    }
+    document.getElementById('commitsSection').style.display = 'block';
+    const list = document.getElementById('commitsList');
+    list.innerHTML = '<div class="loading">Loading…</div>';
+    try {
+        const res = await fetch(`/api/projects/${currentProject.id}/commits?limit=10`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Commits fetch failed');
+
+        if (data.commits.length === 0) {
+            list.innerHTML = '<div class="empty-state">No commits yet</div>';
+            return;
+        }
+        list.innerHTML = data.commits.map(c => `
+            <div class="update-item">
+                <div class="update-header">
+                    <div class="update-title">
+                        <a href="${c.html_url}" target="_blank" style="color: #93c5fd; text-decoration: none; font-family: monospace;">${c.short}</a>
+                        · ${escapeHtml(c.message)}
+                    </div>
+                    <div class="update-time">${c.date ? formatDate(new Date(c.date).getTime() / 1000) : ''}</div>
+                </div>
+                <div style="font-size: 0.8rem; color: #888; margin-top: 4px;">
+                    ${c.author_login ? `@${c.author_login}` : c.author || 'unknown'}
+                </div>
+            </div>
+        `).join('');
+    } catch (e) {
+        list.innerHTML = `<div class="empty-state">⚠ ${e.message}</div>`;
+    }
+}
+
+function escapeHtml(s) {
+    return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 async function openInTerminal(path) {
     try {
         const res = await fetch('/api/util/open-terminal', {
@@ -1446,7 +1541,7 @@ async function openInFolder(path) {
 function copyTerminalCommand(path) {
     const command = `cd "${path}"`;
     navigator.clipboard.writeText(command).then(() => {
-        alert('Copied to clipboard! Paste in your terminal to navigate to this project.');
+        showToast('📋 cd command copied');
     }).catch(err => {
         alert('Failed to copy: ' + err);
     });
