@@ -54,6 +54,12 @@ function showView(viewName) {
         loadNeoView();
     } else if (viewName === 'settings') {
         loadSettings();
+    } else if (viewName === 'myProjects') {
+        // Always re-render so the New Project form can't stick around after
+        // the user navigates away without cancelling.
+        if (typeof renderMyProjects === 'function' && typeof projects !== 'undefined') {
+            renderMyProjects();
+        }
     }
 }
 
@@ -316,12 +322,26 @@ function showAddProject() {
 
                 <div style="display: flex; gap: 12px;">
                     <button type="submit" class="btn btn-primary">🚀 Create Build Room</button>
-                    <button type="button" class="btn btn-secondary" onclick="showView('myProjects')">Cancel</button>
+                    <button type="button" class="btn btn-secondary" onclick="cancelNewProject()">Cancel</button>
                 </div>
             </form>
         </div>
     `;
     document.getElementById('myProjectsList').innerHTML = form;
+}
+
+// Cancel the New Project form: restore the My Projects card grid.
+// showView('myProjects') alone doesn't work because the view is already
+// active — the form is INSIDE #myProjectsList and needs to be replaced
+// with the actual card list.
+function cancelNewProject() {
+    if (typeof renderMyProjects === 'function') {
+        renderMyProjects();
+    } else {
+        // Fallback: reload projects from API (slower but guaranteed)
+        loadProjects();
+    }
+    showView('myProjects');
 }
 
 async function saveProject(event) {
