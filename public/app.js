@@ -230,7 +230,7 @@ const STACK_PRESETS = [
 function showAddProject() {
     const stackOpts = STACK_PRESETS.map(s => `<option value="${s}">${s}</option>`).join('');
     const form = `
-        <div style="background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 32px; max-width: 760px; margin: 0 auto;">
+        <div style="background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 32px; max-width: 760px; margin: 0 auto; grid-column: 1 / -1;">
             <h2 style="margin-bottom: 8px; color: #fff;">🏗️ New Project — Build Room</h2>
             <div style="color: #888; margin-bottom: 24px; font-size: 0.9rem;">Capture the vision, stack, and entry-points once so Claude Code has everything it needs when you open a terminal.</div>
             <form id="newProjectForm" onsubmit="saveProject(event)">
