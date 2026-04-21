@@ -202,47 +202,125 @@ function goBack() {
 
 // ========== PROJECT CREATION ==========
 
+const STACK_PRESETS = [
+    'Next.js + TypeScript + Tailwind',
+    'Next.js + TypeScript + Tailwind + SQLite',
+    'Vite + React + TypeScript',
+    'Vite + React + Tailwind',
+    'Express + SQLite (Node)',
+    'Express + TypeScript + SQLite',
+    'FastAPI + SQLite (Python)',
+    'FastAPI + Postgres (Python)',
+    'Electron + React + TypeScript',
+    'Python CLI (Click)',
+    'Python CLI (Typer)',
+    'Node CLI (Commander)',
+    'Go CLI (Cobra)',
+    'Rust CLI (clap)',
+    'Tauri + React',
+    'SvelteKit',
+    'Astro',
+    'Remix',
+    'Nuxt',
+    'Hono + Cloudflare Workers',
+    'Static HTML/CSS/JS',
+    'Custom (describe below)'
+];
+
 function showAddProject() {
+    const stackOpts = STACK_PRESETS.map(s => `<option value="${s}">${s}</option>`).join('');
     const form = `
-        <div style="background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 32px; max-width: 600px; margin: 0 auto;">
-            <h2 style="margin-bottom: 24px; color: #fff;">New Project</h2>
+        <div style="background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 32px; max-width: 760px; margin: 0 auto;">
+            <h2 style="margin-bottom: 8px; color: #fff;">🏗️ New Project — Build Room</h2>
+            <div style="color: #888; margin-bottom: 24px; font-size: 0.9rem;">Capture the vision, stack, and entry-points once so Claude Code has everything it needs when you open a terminal.</div>
             <form id="newProjectForm" onsubmit="saveProject(event)">
-                <div style="margin-bottom: 16px;">
-                    <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Project Name *</label>
-                    <input type="text" name="name" required style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
-                </div>
-                <div style="margin-bottom: 16px;">
-                    <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Description</label>
-                    <textarea name="description" rows="3" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;"></textarea>
-                </div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+
+                <fieldset style="border: 1px solid #333; border-radius: 10px; padding: 16px; margin-bottom: 20px;">
+                    <legend style="color: #93c5fd; padding: 0 8px;">Basics</legend>
+                    <div style="margin-bottom: 14px;">
+                        <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">Project Name *</label>
+                        <input type="text" name="name" required style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                    </div>
+                    <div style="margin-bottom: 14px;">
+                        <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">One-line description</label>
+                        <input type="text" name="description" placeholder="What this project is, in one sentence" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+                        <div>
+                            <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">Status</label>
+                            <select name="status" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                                <option value="idea">💡 Idea</option>
+                                <option value="planning">📋 Planning</option>
+                                <option value="building">🔨 Building</option>
+                                <option value="launched">🚀 Launched</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">Category</label>
+                            <select name="category" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                                <option value="app">📱 App</option>
+                                <option value="saas">☁️ SaaS</option>
+                                <option value="utility">🔧 Utility</option>
+                                <option value="tool">🛠️ Tool</option>
+                            </select>
+                        </div>
+                    </div>
+                </fieldset>
+
+                <fieldset style="border: 1px solid #333; border-radius: 10px; padding: 16px; margin-bottom: 20px;">
+                    <legend style="color: #93c5fd; padding: 0 8px;">Concept</legend>
+                    <div style="margin-bottom: 14px;">
+                        <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">Prompt / vision</label>
+                        <textarea name="prompt" rows="4" placeholder="Describe the app in natural language — the prompt you'd give Claude Code to start building. Who is it for? What problem does it solve? What are the core features?" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: inherit;"></textarea>
+                    </div>
                     <div>
-                        <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Status</label>
-                        <select name="status" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
-                            <option value="idea">💡 Idea</option>
-                            <option value="planning">📋 Planning</option>
-                            <option value="building">🔨 Building</option>
-                            <option value="launched">🚀 Launched</option>
+                        <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">PRD (Product Requirements Document) <span style="color: #666; font-weight: normal;">— optional, fill later from Edit</span></label>
+                        <textarea name="prd" rows="5" placeholder="Detailed requirements: user stories, acceptance criteria, non-goals, constraints." style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: monospace; font-size: 0.9rem;"></textarea>
+                    </div>
+                </fieldset>
+
+                <fieldset style="border: 1px solid #333; border-radius: 10px; padding: 16px; margin-bottom: 20px;">
+                    <legend style="color: #93c5fd; padding: 0 8px;">Stack</legend>
+                    <div style="margin-bottom: 14px;">
+                        <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">Preset</label>
+                        <select name="stack_preset" onchange="document.querySelector('textarea[name=stack]').value = this.value === 'Custom (describe below)' ? '' : this.value" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                            <option value="">— pick a preset (optional) —</option>
+                            ${stackOpts}
                         </select>
                     </div>
                     <div>
-                        <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Category</label>
-                        <select name="category" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
-                            <option value="app">📱 App</option>
-                            <option value="saas">☁️ SaaS</option>
-                            <option value="utility">🔧 Utility</option>
-                            <option value="tool">🛠️ Tool</option>
-                        </select>
+                        <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">Stack detail</label>
+                        <textarea name="stack" rows="2" placeholder="e.g., Next.js 15 + TypeScript + Tailwind + SQLite (better-sqlite3) + Drizzle ORM" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: monospace;"></textarea>
                     </div>
-                </div>
-                <div style="display: flex; gap: 12px; margin-top: 24px;">
-                    <button type="submit" class="btn btn-primary">Create Project</button>
+                </fieldset>
+
+                <fieldset style="border: 1px solid #333; border-radius: 10px; padding: 16px; margin-bottom: 20px;">
+                    <legend style="color: #93c5fd; padding: 0 8px;">Paths &amp; Links</legend>
+                    <div style="margin-bottom: 14px;">
+                        <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">Local Path <span style="color: #666; font-weight: normal;">— where Claude Code will work</span></label>
+                        <input type="text" name="local_path" placeholder="e.g., C:\\home\\bfoster\\my-project" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: monospace;">
+                    </div>
+                    <div style="margin-bottom: 14px;">
+                        <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">GitHub Repository URL</label>
+                        <input type="url" name="repo_url" placeholder="https://github.com/user/repo" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                    </div>
+                    <div style="margin-bottom: 14px;">
+                        <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">Live URL</label>
+                        <input type="url" name="live_url" placeholder="https://your-app.vercel.app" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                    </div>
+                    <div>
+                        <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">References <span style="color: #666; font-weight: normal;">— one per line (URLs, doc titles, file paths)</span></label>
+                        <textarea name="references" rows="3" placeholder="https://nextjs.org/docs&#10;C:\\reference\\PRD-draft.md&#10;https://example.com/api-spec" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: monospace; font-size: 0.9rem;"></textarea>
+                    </div>
+                </fieldset>
+
+                <div style="display: flex; gap: 12px;">
+                    <button type="submit" class="btn btn-primary">🚀 Create Build Room</button>
                     <button type="button" class="btn btn-secondary" onclick="showView('myProjects')">Cancel</button>
                 </div>
             </form>
         </div>
     `;
-    
     document.getElementById('myProjectsList').innerHTML = form;
 }
 
@@ -250,13 +328,25 @@ async function saveProject(event) {
     event.preventDefault();
     const form = event.target;
     const formData = new FormData(form);
-    
+
+    // Normalize References textarea → JSON array of non-blank lines
+    const refsRaw = (formData.get('references') || '').toString();
+    const references = refsRaw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+
     const data = {
         name: formData.get('name'),
-        description: formData.get('description'),
+        description: formData.get('description') || null,
         status: formData.get('status'),
         category: formData.get('category'),
-        source: 'manual'
+        source: 'manual',
+        prompt: formData.get('prompt') || null,
+        prd: formData.get('prd') || null,
+        stack: formData.get('stack') || null,
+        tech_stack: formData.get('stack') || null, // mirror for card display
+        local_path: formData.get('local_path') || null,
+        repo_url: formData.get('repo_url') || null,
+        live_url: formData.get('live_url') || null,
+        references_json: references.length ? JSON.stringify(references) : null
     };
     
     try {
@@ -268,9 +358,15 @@ async function saveProject(event) {
         
         if (!response.ok) throw new Error('Failed to create project');
         
-        showToast('✅ Project created');
-        loadProjects();
-        showView('myProjects');
+        const created = await response.json();
+        showToast('✅ Build room created');
+        await loadProjects();
+        // Drop the user directly into the new project's build room
+        if (created && created.id) {
+            showProject(created.id);
+        } else {
+            showView('myProjects');
+        }
     } catch (error) {
         alert(`Error: ${error.message}`);
     }
@@ -428,6 +524,46 @@ async function showProject(id) {
         } else {
             readmeSection.style.display = 'none';
         }
+
+        // Build-room sections: Prompt, PRD, References
+        const promptSection = document.getElementById('promptSection');
+        if (promptSection) {
+            if (currentProject.prompt) {
+                promptSection.style.display = 'block';
+                document.getElementById('promptContent').textContent = currentProject.prompt;
+            } else {
+                promptSection.style.display = 'none';
+            }
+        }
+        const prdSection = document.getElementById('prdSection');
+        if (prdSection) {
+            if (currentProject.prd) {
+                prdSection.style.display = 'block';
+                document.getElementById('prdContent').textContent = currentProject.prd;
+            } else {
+                prdSection.style.display = 'none';
+            }
+        }
+        const refsSection = document.getElementById('referencesSection');
+        if (refsSection) {
+            let refs = [];
+            try {
+                refs = currentProject.references_json
+                    ? JSON.parse(currentProject.references_json)
+                    : [];
+            } catch { refs = []; }
+            if (refs.length) {
+                refsSection.style.display = 'block';
+                document.getElementById('referencesList').innerHTML = refs.map(r => {
+                    const isUrl = /^https?:\/\//i.test(r);
+                    return isUrl
+                        ? `<a href="${escapeHtml(r)}" target="_blank" style="color: #93c5fd;">🔗 ${escapeHtml(r)}</a>`
+                        : `<div style="color: #e0e0e0; font-family: monospace; font-size: 0.9rem;">📄 ${escapeHtml(r)}</div>`;
+                }).join('');
+            } else {
+                refsSection.style.display = 'none';
+            }
+        }
         
         // Render clone/sync/launch/commit/install-deps buttons based on state
         const cloneBtn = document.getElementById('cloneBtn');
@@ -456,6 +592,10 @@ async function showProject(id) {
         }
         if (installDepsBtn) {
             installDepsBtn.style.display = currentProject.local_path ? 'inline-block' : 'none';
+        }
+        const claudeBtn = document.getElementById('claudeCodeBtn');
+        if (claudeBtn) {
+            claudeBtn.style.display = currentProject.local_path ? 'inline-block' : 'none';
         }
 
         // Kick off running-server polling so Stop button + URL chip update live
@@ -491,7 +631,13 @@ async function showProject(id) {
                     </div>
                 </div>
             ` : ''}
-            ${currentProject.tech_stack ? `
+            ${currentProject.stack ? `
+                <div class="info-row">
+                    <div class="info-label">Stack</div>
+                    <div class="info-value" style="font-family: monospace; font-size: 0.85rem;">${currentProject.stack}</div>
+                </div>
+            ` : ''}
+            ${currentProject.tech_stack && currentProject.tech_stack !== currentProject.stack ? `
                 <div class="info-row">
                     <div class="info-label">Tech Stack</div>
                     <div class="info-value">${currentProject.tech_stack}</div>
@@ -616,6 +762,25 @@ async function editProject() {
                     <div style="color: #666; font-size: 0.8rem; margin-top: 4px;">Where the local clone lives. Leave blank if not cloned yet.</div>
                 </div>
                 <div style="margin-bottom: 16px;">
+                    <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Stack</label>
+                    <input type="text" name="stack" value="${(currentProject.stack || '').replace(/"/g, '&quot;')}" placeholder="e.g., Next.js 15 + TypeScript + Tailwind + SQLite" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: monospace;">
+                </div>
+                <div style="margin-bottom: 16px;">
+                    <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Prompt / Vision</label>
+                    <textarea name="prompt" rows="4" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">${escapeHtml(currentProject.prompt || '')}</textarea>
+                </div>
+                <div style="margin-bottom: 16px;">
+                    <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">PRD</label>
+                    <textarea name="prd" rows="6" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: monospace; font-size: 0.9rem;">${escapeHtml(currentProject.prd || '')}</textarea>
+                </div>
+                <div style="margin-bottom: 16px;">
+                    <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">References (one per line)</label>
+                    <textarea name="references" rows="3" placeholder="https://docs... or file paths" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: monospace; font-size: 0.9rem;">${(() => {
+                        try { const r = currentProject.references_json ? JSON.parse(currentProject.references_json) : []; return escapeHtml(r.join('\n')); }
+                        catch { return ''; }
+                    })()}</textarea>
+                </div>
+                <div style="margin-bottom: 16px;">
                     <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">README (optional)</label>
                     <textarea name="readme" rows="8" placeholder="Paste or edit README content here..." style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: monospace; font-size: 0.9rem;">${(currentProject.readme || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</textarea>
                 </div>
@@ -638,6 +803,9 @@ async function updateProject(event) {
     const form = event.target;
     const formData = new FormData(form);
     
+    const refsRaw = (formData.get('references') || '').toString();
+    const references = refsRaw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+
     const data = {
         name: formData.get('name'),
         description: formData.get('description'),
@@ -646,7 +814,11 @@ async function updateProject(event) {
         repo_url: formData.get('repo_url') || null,
         live_url: formData.get('live_url') || null,
         local_path: formData.get('local_path') || null,
-        readme: formData.get('readme') || null
+        readme: formData.get('readme') || null,
+        stack: formData.get('stack') || null,
+        prompt: formData.get('prompt') || null,
+        prd: formData.get('prd') || null,
+        references_json: references.length ? JSON.stringify(references) : null
     };
     
     try {
@@ -1521,6 +1693,36 @@ async function openInTerminal(path) {
     } catch (e) {
         alert(`Error: ${e.message}`);
     }
+}
+
+// Opens the user's preferred terminal in the project's local_path and auto-runs
+// `claude` so Claude Code starts with the right cwd. If no local clone yet,
+// alerts the user to clone first.
+async function openInClaudeCode() {
+    if (!currentProject) return;
+    if (!currentProject.local_path) {
+        alert('Clone the repo first — Claude Code needs a working directory.');
+        return;
+    }
+    try {
+        const res = await fetch('/api/util/open-terminal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: currentProject.local_path, command: 'claude' })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to open Claude Code');
+        showToast(`🤖 Claude Code opening in ${currentProject.local_path}`);
+    } catch (e) {
+        alert(`Error: ${e.message}`);
+    }
+}
+
+function copyPromptToClipboard() {
+    if (!currentProject || !currentProject.prompt) return;
+    navigator.clipboard.writeText(currentProject.prompt).then(() => {
+        showToast('📋 Prompt copied — paste into Claude Code');
+    }).catch(err => alert('Copy failed: ' + err));
 }
 
 async function openInFolder(path) {

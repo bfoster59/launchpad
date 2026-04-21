@@ -60,6 +60,18 @@ class LaunchpadDB {
                 updated_at INTEGER DEFAULT (unixepoch())
             );
         `);
+
+        // App-building fields added 2026-04-20 — additive, non-breaking.
+        // Wrapped in try/catch because SQLite lacks ALTER TABLE IF NOT EXISTS.
+        const tryAlter = (sql) => {
+            try { this.db.prepare(sql).run(); } catch (e) {
+                if (!/duplicate column/i.test(e.message)) throw e;
+            }
+        };
+        tryAlter('ALTER TABLE projects ADD COLUMN prompt TEXT');
+        tryAlter('ALTER TABLE projects ADD COLUMN prd TEXT');
+        tryAlter('ALTER TABLE projects ADD COLUMN stack TEXT');
+        tryAlter('ALTER TABLE projects ADD COLUMN references_json TEXT');
     }
 
     // ========== SETTINGS ==========
@@ -90,10 +102,10 @@ class LaunchpadDB {
     
     addProject(project) {
         const stmt = this.db.prepare(`
-            INSERT INTO projects (name, description, status, category, tech_stack, target_market, monetization, pricing, repo_url, live_url, local_path, source, readme)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO projects (name, description, status, category, tech_stack, target_market, monetization, pricing, repo_url, live_url, local_path, source, readme, prompt, prd, stack, references_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
-        
+
         const result = stmt.run(
             project.name,
             project.description || null,
@@ -107,9 +119,13 @@ class LaunchpadDB {
             project.live_url || null,
             project.local_path || null,
             project.source || 'manual',
-            project.readme || null
+            project.readme || null,
+            project.prompt || null,
+            project.prd || null,
+            project.stack || null,
+            project.references_json || null
         );
-        
+
         return this.getProject(result.lastInsertRowid);
     }
 
@@ -142,9 +158,10 @@ class LaunchpadDB {
         const fields = [];
         const params = [];
         
-        const allowed = ['name', 'description', 'status', 'category', 'tech_stack', 
+        const allowed = ['name', 'description', 'status', 'category', 'tech_stack',
                          'target_market', 'monetization', 'pricing', 'repo_url', 'live_url',
-                         'local_path', 'source', 'readme'];
+                         'local_path', 'source', 'readme',
+                         'prompt', 'prd', 'stack', 'references_json'];
         
         allowed.forEach(field => {
             if (updates[field] !== undefined) {

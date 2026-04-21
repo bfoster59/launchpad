@@ -465,27 +465,46 @@ app.get('/api/projects/:id/branches', async (req, res) => {
 // ========== UTILITY: Open terminal / folder in the project's local_path ==========
 
 // Resolve the user's preferred terminal command template. Settings > env > platform default.
-function getTerminalCommand(cwd) {
+// If `runCommand` is given, append it so the terminal opens AND runs that command
+// (useful for 'Open in Claude Code' — spawn terminal and auto-launch claude).
+function getTerminalCommand(cwd, runCommand) {
     const stored = db.getSetting('terminal_app');
     const platform = process.platform;
     const cwdQuoted = `"${cwd.replace(/"/g, '\\"')}"`;
+    const rc = runCommand ? String(runCommand).trim() : '';
 
     const defaults = {
         win32: {
-            wt: `wt new-tab -d ${cwdQuoted}`,
-            cmd: `start cmd /K "cd /d ${cwdQuoted}"`,
-            powershell: `start powershell -NoExit -Command "Set-Location -LiteralPath ${cwdQuoted}"`,
-            pwsh: `start pwsh -NoExit -Command "Set-Location -LiteralPath ${cwdQuoted}"`,
-            gitbash: `start "" "C:\\Program Files\\Git\\bin\\bash.exe" --cd=${cwdQuoted}`
+            wt: rc
+                ? `wt new-tab -d ${cwdQuoted} cmd /K "${rc}"`
+                : `wt new-tab -d ${cwdQuoted}`,
+            cmd: rc
+                ? `start cmd /K "cd /d ${cwdQuoted} && ${rc}"`
+                : `start cmd /K "cd /d ${cwdQuoted}"`,
+            powershell: rc
+                ? `start powershell -NoExit -Command "Set-Location -LiteralPath ${cwdQuoted}; ${rc}"`
+                : `start powershell -NoExit -Command "Set-Location -LiteralPath ${cwdQuoted}"`,
+            pwsh: rc
+                ? `start pwsh -NoExit -Command "Set-Location -LiteralPath ${cwdQuoted}; ${rc}"`
+                : `start pwsh -NoExit -Command "Set-Location -LiteralPath ${cwdQuoted}"`,
+            gitbash: rc
+                ? `start "" "C:\\Program Files\\Git\\bin\\bash.exe" --cd=${cwdQuoted} -c "${rc}; exec bash"`
+                : `start "" "C:\\Program Files\\Git\\bin\\bash.exe" --cd=${cwdQuoted}`
         },
         darwin: {
             terminal: `open -a Terminal ${cwdQuoted}`,
             iterm: `open -a iTerm ${cwdQuoted}`
         },
         linux: {
-            'gnome-terminal': `gnome-terminal --working-directory=${cwdQuoted}`,
-            konsole: `konsole --workdir ${cwdQuoted}`,
-            xterm: `xterm -e "cd ${cwdQuoted} && bash"`
+            'gnome-terminal': rc
+                ? `gnome-terminal --working-directory=${cwdQuoted} -- bash -c "${rc}; exec bash"`
+                : `gnome-terminal --working-directory=${cwdQuoted}`,
+            konsole: rc
+                ? `konsole --workdir ${cwdQuoted} -e bash -c "${rc}; exec bash"`
+                : `konsole --workdir ${cwdQuoted}`,
+            xterm: rc
+                ? `xterm -e "cd ${cwdQuoted} && ${rc}; bash"`
+                : `xterm -e "cd ${cwdQuoted} && bash"`
         }
     };
 
@@ -505,7 +524,11 @@ app.post('/api/util/open-terminal', (req, res) => {
         if (!cwd || !fs.existsSync(cwd)) {
             return res.status(400).json({ error: 'Path not found' });
         }
-        const cmd = getTerminalCommand(cwd);
+        // Optional command that the terminal should run after cd-ing.
+        // Whitelist keeps arbitrary shell strings from being injected.
+        const allowedRun = new Set(['claude', 'npm run dev', 'npm start']);
+        const runCommand = allowedRun.has(req.body.command) ? req.body.command : null;
+        const cmd = getTerminalCommand(cwd, runCommand);
         // spawn with shell:true + detached+unref so the terminal opens a
         // visible window and outlives the launchpad request.
         const child = spawn(cmd, { shell: true, detached: true, stdio: 'ignore' });

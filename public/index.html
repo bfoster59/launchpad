@@ -314,12 +314,31 @@
                     <button id="syncBtn" class="btn btn-primary" onclick="checkSyncStatus()" style="display: none;">🔄 Check Sync Status</button>
                     <button id="commitBtn" class="btn btn-secondary" onclick="openCommitModal()" style="display: none;" title="Commit and/or push changes">💾 Commit / Push</button>
                     <button id="installDepsBtn" class="btn btn-secondary" onclick="runInstallDeps()" style="display: none;" title="npm install in the project directory">📦 Install Deps</button>
+                    <button id="claudeCodeBtn" class="btn btn-primary" onclick="openInClaudeCode()" style="display: none; background: #d97706;" title="Open a terminal in this folder and launch Claude Code">🤖 Open in Claude Code</button>
                 </div>
                 <div id="syncStatus" style="margin-top: 16px; display: none;"></div>
             </div>
             
             <div class="detail-grid">
                 <div>
+                    <div id="promptSection" class="detail-section" style="display: none;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                            <h3 style="margin: 0;">💡 Prompt / Vision</h3>
+                            <button class="btn btn-sm btn-secondary" onclick="copyPromptToClipboard()" title="Copy the prompt to paste into Claude Code">📋 Copy</button>
+                        </div>
+                        <div id="promptContent" style="padding: 12px; background: #0f0f0f; border-radius: 8px; color: #e0e0e0; white-space: pre-wrap; line-height: 1.5; font-size: 0.95rem;"></div>
+                    </div>
+
+                    <div id="prdSection" class="detail-section" style="display: none;">
+                        <h3>📋 PRD</h3>
+                        <pre id="prdContent" class="readme"></pre>
+                    </div>
+
+                    <div id="referencesSection" class="detail-section" style="display: none;">
+                        <h3>🔗 References</h3>
+                        <div id="referencesList" style="display: flex; flex-direction: column; gap: 6px;"></div>
+                    </div>
+
                     <div class="detail-section">
                         <h3>📝 Build Log</h3>
                         <div id="updatesList"></div>
