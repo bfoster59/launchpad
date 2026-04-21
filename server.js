@@ -945,7 +945,12 @@ app.post('/api/projects/:id/clone', async (req, res) => {
         }
 
         try {
-            await execPromise(`git clone "${cloneUrl}" "${targetDir}"`);
+            // -c credential.helper= disables all credential helpers (including
+            // Windows' GCM) for this one command, so the x-access-token we
+            // inject into the URL doesn't get persisted in Windows Credential
+            // Manager and create a duplicate identity ('x-access-token' vs
+            // 'bfoster59') that prompts on every future git operation.
+            await execPromise(`git -c credential.helper= clone "${cloneUrl}" "${targetDir}"`);
         } catch (cloneErr) {
             const msg = (cloneErr.stderr || cloneErr.message || '').trim();
             // Classify the common failure modes so the UI can show something useful
