@@ -44,11 +44,12 @@ function showView(viewName) {
         navTab.classList.add('active');
     }
     
-    // Legacy alias — old GitHubNeo tab now folds into GitHub
+    // Legacy aliases — old tab names still work after the renames
     if (viewName === 'githubNeo') viewName = 'github';
+    if (viewName === 'discover') viewName = 'explore';
 
     // Load data for view
-    if (viewName === 'discover') {
+    if (viewName === 'explore') {
         loadTrending();
     } else if (viewName === 'github') {
         loadNeoView();
@@ -1835,57 +1836,119 @@ async function loadNeoView() {
     }
 }
 
+// ========== POPULAR REPOSITORIES — TABBED TOP 5 ==========
+//
+// Replaces the old broken 4-card row that duplicated the same project across
+// cards when stars were all 0. Now: 5 categories, top 5 each, deduped by id,
+// #1 styled larger. Selected tab persists in localStorage.
+
+const POPULAR_CATEGORIES = [
+    {
+        key: 'active',
+        label: '🔥 Most Active',
+        sort: (a, b) => (b.updated_at || 0) - (a.updated_at || 0),
+        filter: () => true
+    },
+    {
+        key: 'popular',
+        label: '⭐ Most Popular',
+        sort: (a, b) => (b.stars || 0) - (a.stars || 0),
+        filter: (p) => (p.stars || 0) > 0,
+        emptyHint: 'No repos have stars yet — none of your imported repos have public-facing stars > 0.'
+    },
+    {
+        key: 'building',
+        label: '🚀 Building',
+        sort: (a, b) => (b.updated_at || 0) - (a.updated_at || 0),
+        filter: (p) => p.status === 'building',
+        emptyHint: 'No projects in "building" status. Bump one from idea/planning to start.'
+    },
+    {
+        key: 'ideas',
+        label: '💡 Ideas',
+        sort: (a, b) => (b.created_at || 0) - (a.created_at || 0),
+        filter: (p) => p.status === 'idea',
+        emptyHint: 'No "idea" status projects — ideas backlog is empty.'
+    },
+    {
+        key: 'newest',
+        label: '📅 Newest',
+        sort: (a, b) => (b.created_at || 0) - (a.created_at || 0),
+        filter: () => true
+    }
+];
+
+function getPopularTab() {
+    return localStorage.getItem('launchpad.popularTab') || 'active';
+}
+
+function setPopularTab(key) {
+    localStorage.setItem('launchpad.popularTab', key);
+    renderNeoPopular();
+}
+
 function renderNeoPopular() {
     const gridDiv = document.getElementById('neoPopularGrid');
-    
-    if (neoProjects.length === 0) {
+    if (!gridDiv) return;
+
+    if (!neoProjects || neoProjects.length === 0) {
         gridDiv.innerHTML = '<div class="loading">No repositories</div>';
         return;
     }
-    
-    // Calculate popular repos
-    const mostRecent = [...neoProjects].sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0))[0];
-    const mostPopular = [...neoProjects].sort((a, b) => (b.stars || 0) - (a.stars || 0))[0];
-    
-    // Largest = most activity or commits (use updated_at as proxy)
-    const largest = [...neoProjects].filter(p => p.local_path).sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0))[0];
-    
-    // Closest to ship = status 'building' with recent activity
-    const closestToShip = [...neoProjects]
-        .filter(p => p.status === 'building' || p.status === 'launched')
-        .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0))[0] || mostRecent;
-    
-    const cards = [
-        { title: 'Most Recent', project: mostRecent, emoji: '🕐' },
-        { title: 'Most Popular', project: mostPopular, emoji: '⭐' },
-        { title: 'Largest', project: largest, emoji: '📦' },
-        { title: 'Closest to Ship', project: closestToShip, emoji: '🚀' }
-    ];
-    
-    gridDiv.innerHTML = cards.map(card => {
-        const p = card.project;
-        if (!p) return '';
-        
-        const language = p.tech_stack || 'Unknown';
-        const stars = p.stars || 0;
-        const forks = p.forks || 0;
-        
-        return `
-            <div class="neo-popular-card">
-                <h3>
-                    <a href="#" onclick="viewProject(${p.id}); return false;" style="color: #58a6ff; text-decoration: none;">
-                        ${p.name}
-                    </a>
-                </h3>
-                <p>${p.description || 'No description'}</p>
-                <div class="neo-popular-meta">
-                    <span><span class="neo-language-dot"></span> ${language}</span>
-                    <span>⭐ ${stars}</span>
-                    <span>🔱 ${forks}</span>
+
+    const activeKey = getPopularTab();
+    const tabs = POPULAR_CATEGORIES.map(c =>
+        `<button class="import-tab${c.key === activeKey ? ' active' : ''}" onclick="setPopularTab('${c.key}')">${c.label}</button>`
+    ).join('');
+
+    const cat = POPULAR_CATEGORIES.find(c => c.key === activeKey) || POPULAR_CATEGORIES[0];
+    const top5 = [...neoProjects].filter(cat.filter).sort(cat.sort).slice(0, 5);
+
+    let body;
+    if (top5.length === 0) {
+        body = `<div class="empty-state" style="grid-column: 1 / -1;">${cat.emptyHint || 'Nothing to show in this category.'}</div>`;
+    } else {
+        body = top5.map((p, i) => {
+            const isFirst = i === 0;
+            const language = p.tech_stack || p.stack || 'Unknown';
+            const stars = p.stars || 0;
+            const forks = p.forks || 0;
+            const cardStyle = isFirst
+                ? 'border: 2px solid #60a5fa; background: linear-gradient(135deg, #1a2540, #1a1a1a); grid-column: span 2;'
+                : '';
+            const rankBadge = isFirst
+                ? '<span style="background: #60a5fa; color: #0b1220; font-weight: 700; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; margin-right: 8px;">#1</span>'
+                : `<span style="color: #666; font-weight: 600; margin-right: 8px;">#${i + 1}</span>`;
+            const localChip = p.local_path
+                ? '<span style="color: #22c55e; font-size: 0.8rem; margin-left: 8px;">📁 cloned</span>'
+                : '';
+            return `
+                <div class="neo-popular-card" style="${cardStyle} cursor: pointer;" onclick="if(!event.target.closest('a'))showProject(${p.id})">
+                    <h3>
+                        ${rankBadge}
+                        <a href="#" onclick="event.stopPropagation(); showProject(${p.id}); return false;" style="color: #58a6ff; text-decoration: none;">
+                            ${p.name}
+                        </a>
+                        ${localChip}
+                    </h3>
+                    <p>${p.description || 'No description'}</p>
+                    <div class="neo-popular-meta">
+                        <span><span class="neo-language-dot"></span> ${language}</span>
+                        ${stars > 0 ? `<span>⭐ ${stars}</span>` : ''}
+                        ${forks > 0 ? `<span>🔱 ${forks}</span>` : ''}
+                        <span style="color: #666; margin-left: auto;">${p.status || ''}</span>
+                    </div>
                 </div>
-            </div>
-        `;
-    }).join('');
+            `;
+        }).join('');
+    }
+
+    gridDiv.innerHTML = `
+        <div style="grid-column: 1 / -1; display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 16px;">
+            ${tabs}
+        </div>
+        ${body}
+    `;
 }
 
 function renderNeoRepos() {

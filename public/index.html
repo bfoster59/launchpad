@@ -23,7 +23,8 @@
         <button class="nav-tab active" data-view="dashboard" onclick="showView('dashboard')">🚀 Dashboard</button>
         <button class="nav-tab" data-view="myProjects" onclick="showView('myProjects')">📁 My Projects</button>
         <button class="nav-tab" data-view="github" onclick="showView('github')">🐙 GitHub</button>
-        <button class="nav-tab" data-view="discover" onclick="showView('discover')">🔍 Discover</button>
+        <button class="nav-tab" data-view="explore" onclick="showView('explore')">🔍 Explore</button>
+        <button class="nav-tab" data-view="learn" onclick="showView('learn')">🎓 Learn</button>
         <button class="nav-tab" data-view="settings" onclick="showView('settings')">⚙️ Settings</button>
     </nav>
 
@@ -158,10 +159,10 @@
     </div>
 
 
-    <!-- Discover View -->
-    <div id="discoverView" class="view">
+    <!-- Explore View — outward-facing GitHub trending/search/pinning -->
+    <div id="exploreView" class="view">
         <div class="section-header">
-            <h2>🔍 Discover GitHub</h2>
+            <h2>🔍 Explore GitHub</h2>
             <div style="display: flex; gap: 8px; align-items: center;">
                 <input type="text" id="searchInput" placeholder="Search GitHub (e.g. nextjs starter)"
                        style="padding: 8px 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; width: 280px;"
@@ -239,6 +240,33 @@
     </div>
 
     <!-- Settings View -->
+    <!-- Learn View — placeholder for the GitHub bootcamp / learning hub -->
+    <div id="learnView" class="view">
+        <div style="max-width: 760px; margin: 0 auto; padding: 32px 16px;">
+            <h2 style="margin-bottom: 8px;">🎓 Learn</h2>
+            <p style="color: #888; margin-bottom: 32px;">A self-paced GitHub bootcamp + reference hub. Curated tutorials, common-task recipes, and your own knowledge base. Coming soon.</p>
+
+            <section style="background: #1a1a1a; border: 1px dashed #333; border-radius: 12px; padding: 24px; margin-bottom: 16px;">
+                <h3 style="color: #93c5fd; margin-bottom: 12px;">Planned content</h3>
+                <ul style="color: #e0e0e0; line-height: 1.8; padding-left: 20px;">
+                    <li>📘 Git fundamentals — branch, merge, rebase, cherry-pick</li>
+                    <li>🔀 Pull request workflow + code review etiquette</li>
+                    <li>🚀 GitHub Actions — your first workflow, common patterns</li>
+                    <li>🔐 Secrets, tokens, and credential management</li>
+                    <li>📦 Releases, tags, and semantic versioning</li>
+                    <li>🛡️ Branch protection, required reviews, status checks</li>
+                    <li>🧪 Issue templates, PR templates, automation</li>
+                    <li>🌐 GitHub Pages — publishing static sites</li>
+                    <li>🤖 GitHub Copilot integration tips</li>
+                </ul>
+            </section>
+
+            <section style="background: #0f0f0f; border: 1px dashed #333; border-radius: 12px; padding: 16px; color: #888; font-size: 0.9rem;">
+                Want a specific topic added? Edit this view (<code>public/index.html</code> → <code>#learnView</code>) or open an issue on the launchpad repo.
+            </section>
+        </div>
+    </div>
+
     <div id="settingsView" class="view">
         <div style="max-width: 720px; margin: 0 auto; padding: 16px;">
             <h2 style="margin-bottom: 8px;">⚙️ Settings</h2>
