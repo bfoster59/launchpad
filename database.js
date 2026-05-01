@@ -72,6 +72,7 @@ class LaunchpadDB {
         tryAlter('ALTER TABLE projects ADD COLUMN prd TEXT');
         tryAlter('ALTER TABLE projects ADD COLUMN stack TEXT');
         tryAlter('ALTER TABLE projects ADD COLUMN references_json TEXT');
+        tryAlter('ALTER TABLE projects ADD COLUMN last_commit_at INTEGER');
     }
 
     // ========== SETTINGS ==========
@@ -161,7 +162,8 @@ class LaunchpadDB {
         const allowed = ['name', 'description', 'status', 'category', 'tech_stack',
                          'target_market', 'monetization', 'pricing', 'repo_url', 'live_url',
                          'local_path', 'source', 'readme',
-                         'prompt', 'prd', 'stack', 'references_json'];
+                         'prompt', 'prd', 'stack', 'references_json',
+                         'last_commit_at'];
         
         allowed.forEach(field => {
             if (updates[field] !== undefined) {

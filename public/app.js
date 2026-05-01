@@ -1846,7 +1846,13 @@ const POPULAR_CATEGORIES = [
     {
         key: 'active',
         label: '🔥 Most Active',
-        sort: (a, b) => (b.updated_at || 0) - (a.updated_at || 0),
+        // Prefer GitHub's last commit timestamp (populated by Check Sync /
+        // Check All); fall back to launchpad's updated_at when not synced.
+        sort: (a, b) => {
+            const ax = Math.max(a.last_commit_at || 0, a.updated_at || 0);
+            const bx = Math.max(b.last_commit_at || 0, b.updated_at || 0);
+            return bx - ax;
+        },
         filter: () => true
     },
     {

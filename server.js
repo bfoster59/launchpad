@@ -311,9 +311,31 @@ app.get('/api/projects/:id/sync-status', async (req, res) => {
             const { stdout: branchOut } = await execPromise(`cd "${project.local_path}" && git rev-parse --abbrev-ref HEAD`);
             const currentBranch = branchOut.trim();
             
-            // Get last commit info
-            const { stdout: lastCommitOut } = await execPromise(`cd "${project.local_path}" && git log -1 --format="%h|%s|%ar"`);
-            const [hash, message, timeAgo] = lastCommitOut.trim().split('|');
+            // Get last commit info — also pull the unix timestamp so we can
+            // persist it for the Most Active sort + activity-based status auto-bump.
+            const { stdout: lastCommitOut } = await execPromise(`cd "${project.local_path}" && git log -1 --format="%h|%s|%ar|%at"`);
+            const [hash, message, timeAgo, atUnixStr] = lastCommitOut.trim().split('|');
+            const lastCommitAt = parseInt(atUnixStr) || null;
+
+            // Persist last_commit_at + (conservatively) auto-bump idea→building
+            // when the most recent commit is recent. NEVER touches paused/launched/
+            // planning — those are explicit user choices.
+            if (lastCommitAt) {
+                const updates = { last_commit_at: lastCommitAt };
+                const ageDays = (Date.now() / 1000 - lastCommitAt) / 86400;
+                if (project.status === 'idea' && ageDays <= 7) {
+                    updates.status = 'building';
+                }
+                db.updateProject(project.id, updates);
+                if (updates.status) {
+                    db.addUpdate({
+                        project_id: project.id,
+                        type: 'progress',
+                        title: 'Auto-bumped status',
+                        content: `idea → building (recent github activity, last commit ${Math.round(ageDays * 24)}h ago)`
+                    });
+                }
+            }
             
             let status = 'synced';
             let messages = [];
@@ -845,8 +867,9 @@ app.post('/api/projects/:id/commit', async (req, res) => {
                         title: 'Commit',
                         content: message
                     });
-                    // Activity on a dormant project nudges lifecycle to 'building'
-                    if (project.status === 'idea' || project.status === 'paused') {
+                    // Activity on an 'idea' project nudges it to 'building'.
+                    // 'paused' is an explicit user choice — never auto-override.
+                    if (project.status === 'idea') {
                         db.updateProject(project.id, { status: 'building' });
                         results.statusBumped = 'building';
                     }
