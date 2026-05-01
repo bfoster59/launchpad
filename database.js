@@ -59,6 +59,46 @@ class LaunchpadDB {
                 value TEXT,
                 updated_at INTEGER DEFAULT (unixepoch())
             );
+
+            -- Learn Page — lightweight learner profiles. No password, just
+            -- a username so progress can be tracked across sessions. Multiple
+            -- learners can share one launchpad install (e.g., family members).
+            CREATE TABLE IF NOT EXISTS learners (
+                username TEXT PRIMARY KEY,
+                display_name TEXT,
+                created_at INTEGER DEFAULT (unixepoch()),
+                last_active_at INTEGER DEFAULT (unixepoch()),
+                total_xp INTEGER DEFAULT 0,
+                level TEXT DEFAULT 'basic'
+            );
+
+            -- One row per (learner, lesson). status is not_started until the
+            -- learner opens a lesson, then in_progress, then completed once
+            -- the quiz + challenge are passed. score = quiz percentage 0-100.
+            CREATE TABLE IF NOT EXISTS lesson_progress (
+                username TEXT NOT NULL,
+                lesson_id TEXT NOT NULL,
+                status TEXT DEFAULT 'in_progress',
+                score INTEGER DEFAULT 0,
+                attempts INTEGER DEFAULT 0,
+                completed_at INTEGER,
+                PRIMARY KEY (username, lesson_id),
+                FOREIGN KEY (username) REFERENCES learners(username) ON DELETE CASCADE
+            );
+
+            -- Earned badges. badge_id is a slug from the curriculum
+            -- (e.g., 'first-commit', 'branch-boss'). Each can only be
+            -- earned once per learner.
+            CREATE TABLE IF NOT EXISTS learner_badges (
+                username TEXT NOT NULL,
+                badge_id TEXT NOT NULL,
+                earned_at INTEGER DEFAULT (unixepoch()),
+                PRIMARY KEY (username, badge_id),
+                FOREIGN KEY (username) REFERENCES learners(username) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_lesson_progress_user ON lesson_progress(username);
+            CREATE INDEX IF NOT EXISTS idx_learner_badges_user ON learner_badges(username);
         `);
 
         // App-building fields added 2026-04-20 — additive, non-breaking.
@@ -302,6 +342,92 @@ class LaunchpadDB {
         });
         
         return result;
+    }
+
+    // ========== LEARN ==========
+
+    getLearner(username) {
+        return this.db.prepare('SELECT * FROM learners WHERE username = ?').get(username);
+    }
+
+    // Idempotent — first call creates the row, subsequent calls only refresh
+    // display_name (when provided) and last_active_at. We intentionally don't
+    // reset total_xp/level on re-login.
+    upsertLearner({ username, display_name }) {
+        this.db.prepare(`
+            INSERT INTO learners (username, display_name, last_active_at)
+            VALUES (?, ?, unixepoch())
+            ON CONFLICT(username) DO UPDATE SET
+                display_name = COALESCE(excluded.display_name, learners.display_name),
+                last_active_at = unixepoch()
+        `).run(username, display_name || null);
+        return this.getLearner(username);
+    }
+
+    bumpLearnerActivity(username) {
+        this.db.prepare('UPDATE learners SET last_active_at = unixepoch() WHERE username = ?').run(username);
+    }
+
+    getLearnerProgress(username) {
+        return this.db.prepare(
+            'SELECT * FROM lesson_progress WHERE username = ? ORDER BY lesson_id'
+        ).all(username);
+    }
+
+    // Upserts the (username, lesson_id) row. completed_at is stamped only on
+    // the transition to status='completed' so we don't churn the timestamp on
+    // repeat saves.
+    upsertLessonProgress({ username, lesson_id, status, score, attempts }) {
+        this.db.prepare(`
+            INSERT INTO lesson_progress (username, lesson_id, status, score, attempts, completed_at)
+            VALUES (?, ?, ?, ?, ?, CASE WHEN ? = 'completed' THEN unixepoch() ELSE NULL END)
+            ON CONFLICT(username, lesson_id) DO UPDATE SET
+                status = excluded.status,
+                score = excluded.score,
+                attempts = excluded.attempts,
+                completed_at = CASE
+                    WHEN excluded.status = 'completed' AND lesson_progress.completed_at IS NULL
+                        THEN unixepoch()
+                    ELSE lesson_progress.completed_at
+                END
+        `).run(username, lesson_id, status || 'in_progress', score || 0, attempts || 0, status || 'in_progress');
+        return this.db.prepare(
+            'SELECT * FROM lesson_progress WHERE username = ? AND lesson_id = ?'
+        ).get(username, lesson_id);
+    }
+
+    getLearnerBadges(username) {
+        return this.db.prepare(
+            'SELECT * FROM learner_badges WHERE username = ? ORDER BY earned_at'
+        ).all(username);
+    }
+
+    // INSERT OR IGNORE — re-awarding a badge is a no-op. Returns true if a new
+    // badge row was created so the caller can include it in newBadges.
+    addBadge(username, badge_id) {
+        const result = this.db.prepare(
+            'INSERT OR IGNORE INTO learner_badges (username, badge_id) VALUES (?, ?)'
+        ).run(username, badge_id);
+        return result.changes > 0;
+    }
+
+    addXp(username, xp) {
+        this.db.prepare('UPDATE learners SET total_xp = total_xp + ? WHERE username = ?').run(xp, username);
+    }
+
+    setLearnerLevel(username, level) {
+        this.db.prepare('UPDATE learners SET level = ? WHERE username = ?').run(level, username);
+    }
+
+    // Wipe one learner's progress. Wrapped in a transaction so a partial reset
+    // can't leave xp/level out of sync with the empty progress/badges tables.
+    resetLearner(username) {
+        const tx = this.db.transaction((u) => {
+            this.db.prepare('DELETE FROM lesson_progress WHERE username = ?').run(u);
+            this.db.prepare('DELETE FROM learner_badges WHERE username = ?').run(u);
+            this.db.prepare("UPDATE learners SET total_xp = 0, level = 'basic' WHERE username = ?").run(u);
+        });
+        tx(username);
     }
 
     close() {

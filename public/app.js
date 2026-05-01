@@ -54,6 +54,8 @@ function showView(viewName) {
         loadNeoView();
     } else if (viewName === 'settings') {
         loadSettings();
+    } else if (viewName === 'learn') {
+        if (typeof loadLearn === 'function') loadLearn();
     } else if (viewName === 'myProjects') {
         // Always re-render so the New Project form can't stick around after
         // the user navigates away without cancelling.
@@ -2469,8 +2471,852 @@ function timeAgo(timestamp) {
     if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
     if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
     if (diff < 2592000) return `${Math.floor(diff / 604800)}w ago`;
-    
+
     const date = new Date(then);
     return date.toLocaleDateString();
 }
 
+// ===========================================================================
+// LEARN — interactive github bootcamp. Complements the HTML+CSS David built.
+// State lives in Learn.* below. All API calls go through /api/learn/*.
+// ===========================================================================
+
+const LEARN_DEBUG = false;
+const Learn = {
+    username: null,
+    learner: null,
+    curriculum: null,
+    progress: {},        // lessonId → { status, score, attempts, completed_at }
+    badges: new Set(),   // earned badge_ids
+    activeLevel: null,   // currently viewed level key
+    activeLesson: null,  // currently playing lesson object
+    quizState: null,     // { qIndex, score, answers[] }
+    challengeState: null // { attempts, solved }
+};
+
+function _dbg(...a) { if (LEARN_DEBUG) console.log('[learn]', ...a); }
+
+// ----- Entry point -----
+async function loadLearn() {
+    // Ensure curriculum is cached (it's static — fetch once)
+    if (!Learn.curriculum) {
+        try {
+            const res = await fetch('/api/learn/curriculum');
+            Learn.curriculum = await res.json();
+        } catch (e) {
+            console.error('Failed to load curriculum:', e);
+            return;
+        }
+    }
+    // Restore prior login if any
+    const stored = localStorage.getItem('launchpad.learn.username');
+    if (stored) {
+        await learnLoginAs(stored);
+    } else {
+        learnShowScreen('learnLoginScreen');
+    }
+}
+
+function learnShowScreen(id) {
+    ['learnLoginScreen', 'learnDashboardScreen', 'learnModulesScreen', 'learnLessonScreen']
+        .forEach(s => {
+            const el = document.getElementById(s);
+            if (el) el.style.display = (s === id) ? 'block' : 'none';
+        });
+}
+
+// ----- Login / user mgmt -----
+async function learnDoLogin() {
+    const input = document.getElementById('learnLoginInput');
+    const name = (input?.value || '').trim();
+    if (!name) {
+        input?.focus();
+        return;
+    }
+    try {
+        const res = await fetch('/api/learn/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: name, display_name: name })
+        });
+        if (!res.ok) throw new Error((await res.json()).error || 'Login failed');
+        await learnLoginAs(name);
+    } catch (e) {
+        alert('Login failed: ' + e.message);
+    }
+}
+
+async function learnLoginAs(username) {
+    Learn.username = username;
+    localStorage.setItem('launchpad.learn.username', username);
+    // Hydrate progress + badges
+    try {
+        const res = await fetch(`/api/learn/me/${encodeURIComponent(username)}`);
+        if (res.status === 404) {
+            // Stored username no longer exists server-side — re-create
+            await fetch('/api/learn/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, display_name: username })
+            });
+            const r2 = await fetch(`/api/learn/me/${encodeURIComponent(username)}`);
+            const data = await r2.json();
+            _learnHydrate(data);
+        } else {
+            const data = await res.json();
+            _learnHydrate(data);
+        }
+        learnRenderDashboard();
+        learnShowScreen('learnDashboardScreen');
+    } catch (e) {
+        console.error('Hydrate failed:', e);
+    }
+}
+
+function _learnHydrate(data) {
+    Learn.learner = data.learner;
+    Learn.progress = {};
+    (data.progress || []).forEach(p => { Learn.progress[p.lesson_id] = p; });
+    Learn.badges = new Set((data.badges || []).map(b => b.badge_id));
+}
+
+function learnSwitchUser() {
+    if (!confirm('Switch user? Your progress is saved — you can come back anytime.')) return;
+    localStorage.removeItem('launchpad.learn.username');
+    Learn.username = null;
+    Learn.learner = null;
+    Learn.progress = {};
+    Learn.badges = new Set();
+    document.getElementById('learnLoginInput').value = '';
+    learnShowScreen('learnLoginScreen');
+}
+
+async function learnResetProgress() {
+    if (!Learn.username) return;
+    if (!confirm('Wipe ALL your progress and badges for this user? This cannot be undone.')) return;
+    try {
+        await fetch('/api/learn/reset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: Learn.username })
+        });
+        await learnLoginAs(Learn.username);
+    } catch (e) {
+        alert('Reset failed: ' + e.message);
+    }
+}
+
+// ----- Dashboard -----
+function learnRenderDashboard() {
+    const learner = Learn.learner;
+    if (!learner) return;
+
+    // Top bar
+    document.getElementById('learnAvatar').textContent = (learner.display_name || learner.username).charAt(0).toUpperCase();
+    document.getElementById('learnUserName').textContent = learner.display_name || learner.username;
+    document.getElementById('learnLevelChip').textContent = learner.level.charAt(0).toUpperCase() + learner.level.slice(1);
+    document.getElementById('learnLevelChip').dataset.level = learner.level;
+    document.getElementById('learnXpTotal').textContent = learner.total_xp || 0;
+
+    // Streak — last activity within 24h shows streak chip. (We approximate
+    // streak as 1 for now; a real streak counter would track per-day completions.)
+    const streak = _learnComputeStreak();
+    if (streak > 0) {
+        document.getElementById('learnStreakChip').style.display = '';
+        document.getElementById('learnStreakCount').textContent = streak;
+    } else {
+        document.getElementById('learnStreakChip').style.display = 'none';
+    }
+
+    // Recommended Skills — render the curated set
+    _learnRenderRecommendations();
+
+    // Levels grid
+    _learnRenderLevels();
+
+    // Badges row
+    _learnRenderBadges();
+
+    // Recent activity
+    _learnRenderActivity();
+}
+
+function _learnComputeStreak() {
+    // Count completed lessons whose completed_at is within the last 24h.
+    const day = 86400;
+    const now = Math.floor(Date.now() / 1000);
+    const recent = Object.values(Learn.progress).filter(p =>
+        p.status === 'completed' && p.completed_at && (now - p.completed_at) < day
+    );
+    return recent.length > 0 ? 1 : 0;
+}
+
+function _learnRenderRecommendations() {
+    // Replace the existing placeholder card if curriculum has recommendations
+    const recs = Learn.curriculum?.recommendedSkills;
+    if (!recs || !recs.length) return;
+    const section = document.querySelector('.learn-section .learn-recommend-card')?.closest('.learn-section');
+    if (!section) return;
+    const cardsHtml = recs.map(r => `
+        <div class="learn-recommend-card">
+            <div class="learn-recommend-icon">${r.tier === 'top' ? '🏅' : '🔌'}</div>
+            <div class="learn-recommend-body">
+                <div class="learn-recommend-title">${escapeHtml(r.name)} <span style="color:#666;font-weight:400;font-size:0.85rem;">— ${escapeHtml(r.author)}${r.stars ? ' · ⭐ ' + r.stars : ''}</span></div>
+                <div class="learn-recommend-desc">${escapeHtml(r.blurb)}</div>
+                <div style="margin-top:8px;font-size:0.85rem;color:#888;"><strong>Why:</strong> ${escapeHtml(r.why)}</div>
+                ${r.install?.claudeCode ? `<div style="margin-top:8px;"><strong style="color:#93c5fd;font-size:0.85rem;">Install:</strong> <code style="background:#0f0f0f;padding:2px 6px;border-radius:4px;font-size:0.85rem;">${escapeHtml(r.install.claudeCode)}</code></div>` : ''}
+            </div>
+            <a href="${r.repo}" target="_blank" class="learn-btn learn-btn-secondary" style="text-decoration:none;display:inline-block;">View on GitHub →</a>
+        </div>
+    `).join('');
+    section.innerHTML = `<h2 class="learn-section-title">📚 Recommended Skills</h2>${cardsHtml}`;
+}
+
+function _learnRenderLevels() {
+    const grid = document.getElementById('learnLevelsGrid');
+    if (!grid) return;
+    const levels = Learn.curriculum?.levels || [];
+    grid.innerHTML = levels.map((lv, i) => {
+        const stats = _learnLevelStats(lv);
+        const locked = _learnLevelLocked(i);
+        const pct = stats.total ? Math.round(100 * stats.done / stats.total) : 0;
+        const cta = stats.done === 0 ? 'Start' : (stats.done === stats.total ? 'Review' : 'Continue');
+        const emoji = lv.key === 'basic' ? '📘' : lv.key === 'adequate' ? '🎯' : '👑';
+        const clickAction = locked
+            ? `learnShowLockedHint('${lv.key}')`
+            : `learnOpenLevel('${lv.key}')`;
+        return `
+            <div class="learn-level-card ${locked ? 'learn-level-locked' : ''}" data-level="${lv.key}"
+                 style="--level-color:${lv.color};"
+                 onclick="${clickAction}">
+                <div class="learn-level-card-head">
+                    <span class="learn-level-card-emoji">${emoji}</span>
+                    <span class="learn-level-card-name">${lv.label}</span>
+                    ${locked ? '<span class="learn-level-card-lock">🔒</span>' : ''}
+                </div>
+                <p class="learn-level-card-tagline">${escapeHtml(lv.tagline)}</p>
+                <div class="learn-level-card-progress">
+                    <div class="learn-level-card-progress-bar">
+                        <div class="learn-level-card-progress-fill" style="width:${pct}%;background:${lv.color};"></div>
+                    </div>
+                    <div class="learn-level-card-progress-label">${stats.done} / ${stats.total} lessons</div>
+                </div>
+                ${locked
+                    ? `<div class="learn-level-card-locked-hint">Reach ${_learnPrevLevelLabel(i)} 50% to unlock</div>`
+                    : `<button class="learn-btn learn-btn-primary learn-btn-block">${cta} →</button>`}
+            </div>
+        `;
+    }).join('');
+}
+
+function _learnLevelStats(level) {
+    let total = 0, done = 0;
+    (level.modules || []).forEach(m => (m.lessons || []).forEach(l => {
+        total++;
+        if (Learn.progress[l.id]?.status === 'completed') done++;
+    }));
+    return { total, done };
+}
+
+function _learnLevelLocked(idx) {
+    if (idx === 0) return false;
+    const prev = Learn.curriculum.levels[idx - 1];
+    const stats = _learnLevelStats(prev);
+    return stats.total > 0 && stats.done < Math.ceil(stats.total / 2);
+}
+
+function _learnPrevLevelLabel(idx) {
+    return Learn.curriculum.levels[idx - 1]?.label || 'previous';
+}
+
+function learnShowLockedHint(key) {
+    alert(`This level is locked. Complete at least 50% of the previous level to unlock it.`);
+}
+
+function _learnRenderBadges() {
+    const row = document.getElementById('learnBadgesRow');
+    if (!row) return;
+    const allBadges = Learn.curriculum?.badges || {};
+    const allKeys = Object.keys(allBadges);
+    if (allKeys.length === 0) {
+        row.innerHTML = '<div class="learn-activity-empty">No badges yet — complete lessons to earn them.</div>';
+        return;
+    }
+    row.innerHTML = allKeys.map(key => {
+        const b = allBadges[key];
+        const earned = Learn.badges.has(key);
+        return `
+            <div class="learn-badge ${earned ? 'learn-badge-earned' : 'learn-badge-locked'}"
+                 title="${escapeHtml(b.name)}: ${escapeHtml(b.desc)}">
+                <span class="learn-badge-emoji">${earned ? b.emoji : '🔒'}</span>
+                <span class="learn-badge-name">${earned ? escapeHtml(b.name) : '???'}</span>
+            </div>
+        `;
+    }).join('');
+}
+
+function _learnRenderActivity() {
+    const list = document.getElementById('learnActivityList');
+    if (!list) return;
+    const completed = Object.entries(Learn.progress)
+        .filter(([_, p]) => p.status === 'completed' && p.completed_at)
+        .sort((a, b) => b[1].completed_at - a[1].completed_at)
+        .slice(0, 5);
+    if (completed.length === 0) {
+        list.innerHTML = '<div class="learn-activity-empty">No activity yet — pick a level to start your first lesson.</div>';
+        return;
+    }
+    list.innerHTML = completed.map(([id, p]) => {
+        const lesson = _learnFindLesson(id);
+        if (!lesson) return '';
+        return `
+            <div class="learn-activity-item">
+                <span class="learn-activity-icon">✅</span>
+                <div class="learn-activity-body">
+                    <div class="learn-activity-title">${escapeHtml(lesson.title)}</div>
+                    <div class="learn-activity-meta">${lesson.level} · +${lesson.xp} XP · ${timeAgo(p.completed_at)}</div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function _learnFindLesson(lessonId) {
+    for (const lv of (Learn.curriculum?.levels || [])) {
+        for (const m of (lv.modules || [])) {
+            for (const l of (m.lessons || [])) {
+                if (l.id === lessonId) return l;
+            }
+        }
+    }
+    return null;
+}
+
+// ----- Module / lesson list -----
+function learnShowDashboard() {
+    learnRenderDashboard();
+    learnShowScreen('learnDashboardScreen');
+}
+
+function learnOpenLevel(key) {
+    Learn.activeLevel = key;
+    const level = Learn.curriculum.levels.find(l => l.key === key);
+    if (!level) return;
+
+    document.getElementById('learnLevelEmoji').textContent =
+        key === 'basic' ? '📘' : key === 'adequate' ? '🎯' : '👑';
+    document.getElementById('learnLevelTitle').textContent = level.label + ' — ' + level.tagline;
+
+    const stats = _learnLevelStats(level);
+    const pct = stats.total ? Math.round(100 * stats.done / stats.total) : 0;
+    const fill = document.getElementById('learnLevelProgressFill');
+    fill.style.width = pct + '%';
+    fill.style.background = level.color;
+    document.getElementById('learnLevelProgressLabel').textContent =
+        `${stats.done} of ${stats.total} lessons complete`;
+
+    const list = document.getElementById('learnModulesList');
+    list.innerHTML = (level.modules || []).map(m => `
+        <section class="learn-module">
+            <h3 class="learn-module-title">${escapeHtml(m.label)}</h3>
+            <div class="learn-lessons-list">
+                ${(m.lessons || []).map(l => _learnRenderLessonCard(l)).join('')}
+            </div>
+        </section>
+    `).join('');
+
+    learnShowScreen('learnModulesScreen');
+}
+
+function _learnRenderLessonCard(lesson) {
+    const p = Learn.progress[lesson.id];
+    let icon = '⚪', statusLabel = 'Not started';
+    if (p?.status === 'in_progress') { icon = '🔵'; statusLabel = 'In progress'; }
+    if (p?.status === 'completed')   { icon = '✅'; statusLabel = `Completed · ${p.score || 0}%`; }
+    const badge = lesson.badge_id ? Learn.curriculum.badges[lesson.badge_id] : null;
+    return `
+        <div class="learn-lesson-card" onclick="learnStartLesson('${lesson.id}')">
+            <div class="learn-lesson-card-icon">${icon}</div>
+            <div class="learn-lesson-card-body">
+                <div class="learn-lesson-card-title">${escapeHtml(lesson.title)}</div>
+                <div class="learn-lesson-card-summary">${escapeHtml(lesson.summary || '')}</div>
+                <div class="learn-lesson-card-meta">
+                    <span>⚡ +${lesson.xp} XP</span>
+                    ${badge ? `<span title="Earns: ${escapeHtml(badge.name)}">${badge.emoji} ${escapeHtml(badge.name)}</span>` : ''}
+                    <span class="learn-lesson-card-status">${statusLabel}</span>
+                </div>
+            </div>
+            <div class="learn-lesson-card-cta">▶</div>
+        </div>
+    `;
+}
+
+// ----- Lesson player -----
+function learnStartLesson(lessonId) {
+    const lesson = _learnFindLesson(lessonId);
+    if (!lesson) return;
+    Learn.activeLesson = lesson;
+    Learn.quizState = { qIndex: 0, score: 0, answers: [] };
+    Learn.challengeState = { attempts: 0, solved: false };
+    localStorage.setItem('launchpad.learn.lastViewed', lessonId);
+
+    document.getElementById('learnLessonTitle').textContent = lesson.title;
+    document.getElementById('learnLessonSummary').textContent = lesson.summary || '';
+    document.getElementById('learnLessonXpBadge').textContent = `+${lesson.xp} XP`;
+    document.getElementById('learnLessonTrail').textContent =
+        `${lesson.level.toUpperCase()} · ${lesson.id}`;
+
+    // Mark in_progress server-side (fire-and-forget)
+    if (!Learn.progress[lesson.id] || Learn.progress[lesson.id].status === 'not_started') {
+        fetch('/api/learn/progress', {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: Learn.username, lesson_id: lesson.id, status: 'in_progress', score: 0, attempts: 0 })
+        }).catch(() => {});
+    }
+
+    learnShowScreen('learnLessonScreen');
+    _learnSetStage('content');
+    _learnRenderContent();
+    _learnUpdateLessonProgressBar(0);
+}
+
+function _learnSetStage(stage) {
+    ['Content', 'Quiz', 'Challenge', 'Complete'].forEach(s => {
+        const el = document.getElementById('learnStage' + s);
+        if (el) el.style.display = (s.toLowerCase() === stage) ? 'block' : 'none';
+    });
+}
+
+function _learnUpdateLessonProgressBar(pct) {
+    const fill = document.getElementById('learnLessonProgressFill');
+    if (fill) fill.style.width = pct + '%';
+}
+
+// ---- Stage 1: Content ----
+function _learnRenderContent() {
+    const body = document.getElementById('learnContentBody');
+    const blocks = Learn.activeLesson.content || [];
+    body.innerHTML = blocks.map(b => {
+        if (b.type === 'text') return `<div class="learn-content-text">${_learnMd(b.md)}</div>`;
+        if (b.type === 'code') return `<pre class="learn-content-code"><code class="lang-${escapeHtml(b.lang || '')}">${escapeHtml(b.code || '')}</code></pre>`;
+        if (b.type === 'callout') {
+            const kind = b.kind || 'info';
+            return `<div class="learn-callout learn-callout-${kind}"><span class="learn-callout-icon">${kind === 'tip' ? '💡' : kind === 'warn' ? '⚠️' : 'ℹ️'}</span><div>${_learnMd(b.md)}</div></div>`;
+        }
+        return '';
+    }).join('');
+}
+
+// Tiny markdown parser — handles **bold**, *italic*, `code`, and triple-backtick blocks
+function _learnMd(s) {
+    if (!s) return '';
+    let html = String(s);
+    // Code blocks first (```...```)
+    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) =>
+        `<pre class="learn-content-code"><code class="lang-${escapeHtml(lang)}">${escapeHtml(code)}</code></pre>`);
+    // Escape any remaining HTML in the rest, but preserve our pre blocks
+    const parts = html.split(/(<pre[\s\S]*?<\/pre>)/);
+    html = parts.map(p => {
+        if (p.startsWith('<pre')) return p;
+        let txt = escapeHtml(p);
+        txt = txt.replace(/`([^`]+)`/g, '<code>$1</code>');
+        txt = txt.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        txt = txt.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+        txt = txt.replace(/\n\n/g, '</p><p>');
+        txt = txt.replace(/\n- ([^\n]+)/g, '<li>$1</li>');
+        txt = txt.replace(/(<li>[\s\S]+<\/li>)/, '<ul>$1</ul>');
+        txt = txt.replace(/\n/g, '<br>');
+        return `<p>${txt}</p>`;
+    }).join('');
+    return html;
+}
+
+function learnAdvanceFromContent() {
+    _learnUpdateLessonProgressBar(33);
+    _learnSetStage('quiz');
+    _learnRenderQuizQuestion();
+}
+
+// ---- Stage 2: Quiz ----
+function _learnRenderQuizQuestion() {
+    const lesson = Learn.activeLesson;
+    const quiz = lesson.quiz || [];
+    const idx = Learn.quizState.qIndex;
+    if (idx >= quiz.length) {
+        // Quiz finished — go to challenge
+        _learnUpdateLessonProgressBar(66);
+        _learnSetStage('challenge');
+        _learnRenderChallenge();
+        return;
+    }
+    const q = quiz[idx];
+    document.getElementById('learnQuizProgress').textContent = `Question ${idx + 1} of ${quiz.length}`;
+    document.getElementById('learnQuizScore').textContent = `Score: ${Learn.quizState.score}`;
+    const body = document.getElementById('learnQuizBody');
+
+    if (q.type === 'mcq') {
+        body.innerHTML = `
+            <div class="learn-quiz-question">${escapeHtml(q.q)}</div>
+            <div class="learn-quiz-choices">
+                ${q.choices.map((c, i) => `
+                    <button class="learn-quiz-choice" data-i="${i}" onclick="learnSubmitMCQ(${i})">${escapeHtml(c)}</button>
+                `).join('')}
+            </div>
+            <div id="learnQuizFeedback" class="learn-quiz-feedback" style="display:none;"></div>
+        `;
+    } else if (q.type === 'short') {
+        body.innerHTML = `
+            <div class="learn-quiz-question">${escapeHtml(q.q)}</div>
+            <input type="text" id="learnQuizInput" class="learn-input learn-quiz-input"
+                   placeholder="Your answer…" autocomplete="off"
+                   onkeypress="if(event.key==='Enter') learnSubmitShort()">
+            <button class="learn-btn learn-btn-primary" onclick="learnSubmitShort()">Submit</button>
+            <div id="learnQuizFeedback" class="learn-quiz-feedback" style="display:none;"></div>
+        `;
+        setTimeout(() => document.getElementById('learnQuizInput')?.focus(), 50);
+    }
+}
+
+function learnSubmitMCQ(picked) {
+    const q = Learn.activeLesson.quiz[Learn.quizState.qIndex];
+    const correct = picked === q.answer;
+    _learnQuizFeedback(correct, q.explain, q.choices[q.answer]);
+    document.querySelectorAll('.learn-quiz-choice').forEach(b => {
+        b.disabled = true;
+        const i = parseInt(b.dataset.i);
+        if (i === q.answer) b.classList.add('learn-quiz-choice-correct');
+        else if (i === picked) b.classList.add('learn-quiz-choice-wrong');
+    });
+    if (correct) Learn.quizState.score++;
+}
+
+function learnSubmitShort() {
+    const q = Learn.activeLesson.quiz[Learn.quizState.qIndex];
+    const input = document.getElementById('learnQuizInput');
+    const ans = (input.value || '').trim().toLowerCase();
+    const accept = (q.accept || [q.answer]).map(a => a.toLowerCase());
+    const correct = accept.includes(ans);
+    _learnQuizFeedback(correct, q.explain, q.answer);
+    input.disabled = true;
+    if (correct) Learn.quizState.score++;
+}
+
+function _learnQuizFeedback(correct, explain, correctAnswer) {
+    const fb = document.getElementById('learnQuizFeedback');
+    fb.style.display = 'block';
+    fb.className = 'learn-quiz-feedback ' + (correct ? 'learn-quiz-feedback-correct' : 'learn-quiz-feedback-wrong');
+    fb.innerHTML = `
+        <div class="learn-quiz-feedback-headline">${correct ? '✅ Correct!' : '❌ Not quite'}</div>
+        ${!correct ? `<div class="learn-quiz-feedback-answer">Answer: <strong>${escapeHtml(correctAnswer || '')}</strong></div>` : ''}
+        ${explain ? `<div class="learn-quiz-feedback-explain">${escapeHtml(explain)}</div>` : ''}
+        <button class="learn-btn learn-btn-primary" onclick="learnNextQuizQuestion()">${Learn.quizState.qIndex + 1 < Learn.activeLesson.quiz.length ? 'Next Question →' : 'Onward to Challenge →'}</button>
+    `;
+}
+
+function learnNextQuizQuestion() {
+    Learn.quizState.qIndex++;
+    _learnRenderQuizQuestion();
+}
+
+// ---- Stage 3: Challenge ----
+function _learnRenderChallenge() {
+    const ch = Learn.activeLesson.challenge;
+    const body = document.getElementById('learnChallengeBody');
+    document.getElementById('learnChallengeAttempts').textContent = '';
+
+    if (!ch) {
+        // No challenge — go straight to complete
+        _learnLessonComplete();
+        return;
+    }
+
+    if (ch.type === 'command-sandbox') {
+        body.innerHTML = `
+            <div class="learn-challenge-prompt">${escapeHtml(ch.prompt)}</div>
+            <div class="learn-terminal">
+                <span class="learn-terminal-prompt">$</span>
+                <input type="text" id="learnChallengeInput" class="learn-terminal-input"
+                       placeholder="type the command…" autocomplete="off"
+                       onkeypress="if(event.key==='Enter') learnSubmitCommand()">
+            </div>
+            <div class="learn-challenge-actions">
+                <button class="learn-btn learn-btn-primary" onclick="learnSubmitCommand()">Run ⏎</button>
+                <button class="learn-btn learn-btn-ghost" onclick="learnShowHint()">💡 Hint</button>
+            </div>
+            <div id="learnChallengeFeedback" class="learn-challenge-feedback" style="display:none;"></div>
+        `;
+        setTimeout(() => document.getElementById('learnChallengeInput')?.focus(), 50);
+    } else if (ch.type === 'order-steps') {
+        const steps = (ch.steps || []).map((s, i) => ({ s, i }));
+        // Shuffle
+        for (let i = steps.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [steps[i], steps[j]] = [steps[j], steps[i]];
+        }
+        body.innerHTML = `
+            <div class="learn-challenge-prompt">${escapeHtml(ch.prompt)}</div>
+            <ul id="learnOrderList" class="learn-order-list">
+                ${steps.map(s => `<li class="learn-order-item" draggable="true" data-i="${s.i}"><span class="learn-order-grip">≡</span><span>${escapeHtml(s.s)}</span></li>`).join('')}
+            </ul>
+            <div class="learn-challenge-actions">
+                <button class="learn-btn learn-btn-primary" onclick="learnSubmitOrder()">Submit Order</button>
+                <button class="learn-btn learn-btn-ghost" onclick="learnShowHint()">💡 Hint</button>
+            </div>
+            <div id="learnChallengeFeedback" class="learn-challenge-feedback" style="display:none;"></div>
+        `;
+        _learnWireDragOrder();
+    } else if (ch.type === 'choose-path') {
+        body.innerHTML = `
+            <div class="learn-challenge-prompt">${escapeHtml(ch.prompt)}</div>
+            <div class="learn-path-choices">
+                ${ch.choices.map((c, i) => `
+                    <button class="learn-path-choice" data-i="${i}" onclick="learnSubmitPath(${i})">${escapeHtml(c.label)}</button>
+                `).join('')}
+            </div>
+            <div id="learnChallengeFeedback" class="learn-challenge-feedback" style="display:none;"></div>
+        `;
+    } else {
+        // Unknown challenge type — skip
+        _learnLessonComplete();
+    }
+}
+
+function learnSubmitCommand() {
+    const ch = Learn.activeLesson.challenge;
+    const input = document.getElementById('learnChallengeInput');
+    const ans = (input.value || '').trim();
+    const accept = (ch.accept || [ch.expected]).map(s => s.trim());
+    const ok = accept.some(a => a.toLowerCase() === ans.toLowerCase());
+    Learn.challengeState.attempts++;
+    document.getElementById('learnChallengeAttempts').textContent = `Attempts: ${Learn.challengeState.attempts}`;
+    if (ok) {
+        Learn.challengeState.solved = true;
+        _learnChallengeFeedback(true, `Nice — \`${escapeHtml(ans)}\` is correct.`);
+    } else {
+        _learnChallengeFeedback(false, `\`${escapeHtml(ans)}\` isn't quite right. ${Learn.challengeState.attempts >= 2 ? 'Hint: ' + escapeHtml(ch.hint || '') : 'Try again.'}`);
+    }
+}
+
+function learnSubmitOrder() {
+    const ch = Learn.activeLesson.challenge;
+    const items = Array.from(document.querySelectorAll('#learnOrderList .learn-order-item'));
+    const userOrder = items.map(it => parseInt(it.dataset.i));
+    const correct = userOrder.every((v, i) => v === i);
+    Learn.challengeState.attempts++;
+    if (correct) {
+        Learn.challengeState.solved = true;
+        _learnChallengeFeedback(true, 'Perfect order!');
+    } else {
+        _learnChallengeFeedback(false, `Not quite. ${Learn.challengeState.attempts >= 2 ? 'Hint: ' + escapeHtml(ch.hint || '') : 'Reshuffle and try again.'}`);
+    }
+}
+
+function learnSubmitPath(i) {
+    const ch = Learn.activeLesson.challenge;
+    const choice = ch.choices[i];
+    Learn.challengeState.attempts++;
+    document.querySelectorAll('.learn-path-choice').forEach(b => {
+        b.disabled = true;
+        const idx = parseInt(b.dataset.i);
+        if (ch.choices[idx].correct) b.classList.add('learn-quiz-choice-correct');
+        else if (idx === i) b.classList.add('learn-quiz-choice-wrong');
+    });
+    if (choice.correct) {
+        Learn.challengeState.solved = true;
+        _learnChallengeFeedback(true, choice.explain);
+    } else {
+        _learnChallengeFeedback(false, choice.explain);
+    }
+}
+
+function _learnChallengeFeedback(correct, msg) {
+    const fb = document.getElementById('learnChallengeFeedback');
+    fb.style.display = 'block';
+    fb.className = 'learn-challenge-feedback ' + (correct ? 'learn-challenge-feedback-correct' : 'learn-challenge-feedback-wrong');
+    fb.innerHTML = `
+        <div class="learn-challenge-feedback-headline">${correct ? '🎯 Solved!' : '🤔 Not yet'}</div>
+        <div>${msg}</div>
+        ${correct ? `<button class="learn-btn learn-btn-primary" onclick="_learnLessonComplete()">Finish Lesson →</button>` : ''}
+    `;
+}
+
+function learnShowHint() {
+    const ch = Learn.activeLesson.challenge;
+    if (!ch?.hint) return;
+    const fb = document.getElementById('learnChallengeFeedback');
+    fb.style.display = 'block';
+    fb.className = 'learn-challenge-feedback';
+    fb.innerHTML = `<div>💡 <strong>Hint:</strong> ${escapeHtml(ch.hint)}</div>`;
+}
+
+function _learnWireDragOrder() {
+    const list = document.getElementById('learnOrderList');
+    if (!list) return;
+    let dragged = null;
+    list.querySelectorAll('.learn-order-item').forEach(item => {
+        item.addEventListener('dragstart', e => { dragged = item; item.classList.add('learn-dragging'); });
+        item.addEventListener('dragend', () => { item.classList.remove('learn-dragging'); dragged = null; });
+        item.addEventListener('dragover', e => {
+            e.preventDefault();
+            if (!dragged || dragged === item) return;
+            const rect = item.getBoundingClientRect();
+            const after = (e.clientY - rect.top) > rect.height / 2;
+            list.insertBefore(dragged, after ? item.nextSibling : item);
+        });
+    });
+}
+
+// ---- Stage 4: Complete ----
+async function _learnLessonComplete() {
+    const lesson = Learn.activeLesson;
+    const totalQs = (lesson.quiz || []).length;
+    const score = totalQs ? Math.round(100 * Learn.quizState.score / totalQs) : 100;
+
+    // Persist progress + collect any new badges/level-up
+    let newBadges = [];
+    let leveledUp = false;
+    let learner = Learn.learner;
+    try {
+        const res = await fetch('/api/learn/progress', {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                username: Learn.username,
+                lesson_id: lesson.id,
+                status: 'completed',
+                score,
+                attempts: Learn.challengeState.attempts || 1
+            })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            learner = data.learner;
+            newBadges = data.newBadges || [];
+            leveledUp = !!data.leveledUp;
+            // Update local cache
+            Learn.learner = learner;
+            Learn.progress[lesson.id] = {
+                lesson_id: lesson.id,
+                status: 'completed',
+                score,
+                attempts: Learn.challengeState.attempts || 1,
+                completed_at: Math.floor(Date.now() / 1000)
+            };
+            newBadges.forEach(b => Learn.badges.add(b));
+        }
+    } catch (e) {
+        console.error('Save progress failed:', e);
+    }
+
+    _learnUpdateLessonProgressBar(100);
+    _learnSetStage('complete');
+    document.getElementById('learnCompleteXp').textContent = lesson.xp;
+
+    // Animate XP counter
+    _learnAnimateXp(0, lesson.xp);
+
+    // Badge unlock — show first one in modal
+    if (newBadges.length) {
+        const badgeId = newBadges[0];
+        const badge = Learn.curriculum.badges?.[badgeId];
+        if (badge) {
+            document.getElementById('learnCompleteBadgeWrap').style.display = 'block';
+            document.getElementById('learnCompleteBadgeName').textContent = `${badge.emoji} ${badge.name}`;
+            setTimeout(() => _learnShowBadgeModal(badge), 800);
+        }
+    } else {
+        document.getElementById('learnCompleteBadgeWrap').style.display = 'none';
+    }
+
+    // Confetti!
+    _learnConfetti();
+
+    // Level-up overlay
+    if (leveledUp && learner) {
+        setTimeout(() => _learnShowLevelUp(learner.level), 1200);
+    }
+
+    // Hide "Continue to Next Lesson" button if there's no next lesson
+    const next = _learnFindNextLesson(lesson);
+    document.getElementById('learnContinueNextBtn').style.display = next ? '' : 'none';
+}
+
+function _learnAnimateXp(from, to) {
+    const el = document.getElementById('learnCompleteXp');
+    if (!el) return;
+    const dur = 800;
+    const start = performance.now();
+    const tick = (now) => {
+        const t = Math.min(1, (now - start) / dur);
+        el.textContent = Math.floor(from + (to - from) * t);
+        if (t < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+}
+
+function _learnFindNextLesson(current) {
+    const levels = Learn.curriculum?.levels || [];
+    let found = false;
+    for (const lv of levels) {
+        for (const m of (lv.modules || [])) {
+            for (const l of (m.lessons || [])) {
+                if (found) return l;
+                if (l.id === current.id) found = true;
+            }
+        }
+    }
+    return null;
+}
+
+function learnGoNextLesson() {
+    const next = _learnFindNextLesson(Learn.activeLesson);
+    if (next) learnStartLesson(next.id);
+    else learnExitLesson();
+}
+
+function learnExitLesson() {
+    Learn.activeLesson = null;
+    if (Learn.activeLevel) learnOpenLevel(Learn.activeLevel);
+    else learnShowDashboard();
+}
+
+// ---- Animations ----
+function _learnConfetti() {
+    const container = document.getElementById('learnConfetti');
+    if (!container) return;
+    container.innerHTML = '';
+    container.style.display = 'block';
+    const colors = ['#60a5fa', '#fbbf24', '#a78bfa', '#22c55e', '#f472b6'];
+    for (let i = 0; i < 60; i++) {
+        const piece = document.createElement('div');
+        piece.className = 'learn-confetti-piece';
+        piece.style.left = (Math.random() * 100) + '%';
+        piece.style.background = colors[Math.floor(Math.random() * colors.length)];
+        piece.style.animationDelay = (Math.random() * 0.5) + 's';
+        piece.style.animationDuration = (2 + Math.random() * 1.5) + 's';
+        piece.style.transform = `rotate(${Math.random() * 360}deg)`;
+        container.appendChild(piece);
+    }
+    setTimeout(() => { container.style.display = 'none'; }, 4000);
+}
+
+function _learnShowLevelUp(level) {
+    const overlay = document.getElementById('learnLevelUpOverlay');
+    if (!overlay) return;
+    document.getElementById('learnLevelUpName').textContent = level.toUpperCase();
+    overlay.style.display = 'flex';
+    setTimeout(() => { overlay.style.display = 'none'; }, 2500);
+}
+
+function _learnShowBadgeModal(badge) {
+    const modal = document.getElementById('learnBadgeModal');
+    if (!modal) return;
+    document.getElementById('learnBadgeModalEmoji').textContent = badge.emoji;
+    document.getElementById('learnBadgeModalName').textContent = badge.name;
+    document.getElementById('learnBadgeModalDesc').textContent = badge.desc;
+    modal.style.display = 'flex';
+}
+
+function learnCloseBadgeModal(e) {
+    if (e && e.target.id !== 'learnBadgeModal' && !e.target.classList?.contains('learn-btn')) return;
+    document.getElementById('learnBadgeModal').style.display = 'none';
+}

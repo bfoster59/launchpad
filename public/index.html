@@ -331,33 +331,200 @@
         </div>
     </div>
 
-    <!-- Settings View -->
-    <!-- Learn View — placeholder for the GitHub bootcamp / learning hub -->
+    <!-- Learn View — interactive GitHub bootcamp -->
     <div id="learnView" class="view">
-        <div style="max-width: 760px; margin: 0 auto; padding: 32px 16px;">
-            <h2 style="margin-bottom: 8px;">🎓 Learn</h2>
-            <p style="color: #888; margin-bottom: 32px;">A self-paced GitHub bootcamp + reference hub. Curated tutorials, common-task recipes, and your own knowledge base. Coming soon.</p>
+        <!-- Login screen (shown when no learn username in localStorage) -->
+        <div id="learnLoginScreen" class="learn-screen">
+            <div class="learn-login-card">
+                <div class="learn-login-emoji">🎓</div>
+                <h1 class="learn-login-title">Learn GitHub</h1>
+                <p class="learn-login-subtitle">Master Git, GitHub, and modern dev workflows — at your own pace.</p>
 
-            <section style="background: #1a1a1a; border: 1px dashed #333; border-radius: 12px; padding: 24px; margin-bottom: 16px;">
-                <h3 style="color: #93c5fd; margin-bottom: 12px;">Planned content</h3>
-                <ul style="color: #e0e0e0; line-height: 1.8; padding-left: 20px;">
-                    <li>📘 Git fundamentals — branch, merge, rebase, cherry-pick</li>
-                    <li>🔀 Pull request workflow + code review etiquette</li>
-                    <li>🚀 GitHub Actions — your first workflow, common patterns</li>
-                    <li>🔐 Secrets, tokens, and credential management</li>
-                    <li>📦 Releases, tags, and semantic versioning</li>
-                    <li>🛡️ Branch protection, required reviews, status checks</li>
-                    <li>🧪 Issue templates, PR templates, automation</li>
-                    <li>🌐 GitHub Pages — publishing static sites</li>
-                    <li>🤖 GitHub Copilot integration tips</li>
-                </ul>
+                <div class="learn-login-form">
+                    <label class="learn-login-label">Pick a name to track your progress</label>
+                    <input type="text" id="learnLoginInput" class="learn-input" placeholder="e.g. bob" maxlength="40"
+                           onkeypress="if(event.key==='Enter') learnDoLogin()" autocomplete="off">
+                    <button class="learn-btn learn-btn-primary learn-btn-block" onclick="learnDoLogin()">
+                        Start Learning →
+                    </button>
+                </div>
+
+                <div class="learn-login-perks">
+                    <div class="learn-perk"><span>⚡</span><div><strong>3 Levels</strong><br>Basic · Adequate · Expert</div></div>
+                    <div class="learn-perk"><span>🏆</span><div><strong>Earn Badges</strong><br>Track your journey</div></div>
+                    <div class="learn-perk"><span>🎯</span><div><strong>Hands-on</strong><br>Quizzes + challenges</div></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Dashboard screen -->
+        <div id="learnDashboardScreen" class="learn-screen" style="display: none;">
+            <!-- Top bar: avatar / name / level / xp / menu -->
+            <div class="learn-topbar">
+                <div class="learn-user">
+                    <div class="learn-avatar" id="learnAvatar">?</div>
+                    <div>
+                        <div class="learn-user-name" id="learnUserName"></div>
+                        <div class="learn-user-meta">
+                            <span class="learn-level-chip" id="learnLevelChip">Basic</span>
+                            <span class="learn-xp-display"><span class="learn-xp-icon">⚡</span><span id="learnXpTotal">0</span> XP</span>
+                            <span id="learnStreakChip" class="learn-streak-chip" style="display:none;">🔥 <span id="learnStreakCount">0</span> day streak</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="learn-topbar-actions">
+                    <button class="learn-btn learn-btn-ghost" onclick="learnSwitchUser()">↻ Switch user</button>
+                    <button class="learn-btn learn-btn-ghost learn-btn-danger" onclick="learnResetProgress()">⚠ Reset progress</button>
+                </div>
+            </div>
+
+            <!-- Recommended Skills -->
+            <section class="learn-section">
+                <h2 class="learn-section-title">📚 Recommended Skills</h2>
+                <div class="learn-recommend-card">
+                    <div class="learn-recommend-icon">🔌</div>
+                    <div class="learn-recommend-body">
+                        <div class="learn-recommend-title">GitHub MCP server</div>
+                        <div class="learn-recommend-desc">Connect Claude Code to your GitHub account for repo-aware coding. Personalized recommendations coming soon.</div>
+                    </div>
+                    <button class="learn-btn learn-btn-secondary" disabled>Coming soon</button>
+                </div>
             </section>
 
-            <section style="background: #0f0f0f; border: 1px dashed #333; border-radius: 12px; padding: 16px; color: #888; font-size: 0.9rem;">
-                Want a specific topic added? Edit this view (<code>public/index.html</code> → <code>#learnView</code>) or open an issue on the launchpad repo.
+            <!-- Level cards -->
+            <section class="learn-section">
+                <h2 class="learn-section-title">🗺️ Your Journey</h2>
+                <div class="learn-levels-grid" id="learnLevelsGrid">
+                    <!-- Rendered by JS -->
+                </div>
+            </section>
+
+            <!-- Badges -->
+            <section class="learn-section">
+                <h2 class="learn-section-title">🏆 Earned Badges</h2>
+                <div class="learn-badges-row" id="learnBadgesRow">
+                    <!-- Rendered by JS -->
+                </div>
+            </section>
+
+            <!-- Recent activity -->
+            <section class="learn-section">
+                <h2 class="learn-section-title">📜 Recent Activity</h2>
+                <div class="learn-activity-list" id="learnActivityList">
+                    <div class="learn-activity-empty">No activity yet — pick a level to start your first lesson.</div>
+                </div>
             </section>
         </div>
+
+        <!-- Module / Lesson list screen -->
+        <div id="learnModulesScreen" class="learn-screen" style="display: none;">
+            <div class="learn-back-row">
+                <button class="learn-back-btn" onclick="learnShowDashboard()">← Back to Dashboard</button>
+            </div>
+            <div class="learn-level-header">
+                <div class="learn-level-emoji" id="learnLevelEmoji">📘</div>
+                <div class="learn-level-info">
+                    <h1 class="learn-level-title" id="learnLevelTitle">Basic</h1>
+                    <div class="learn-level-progress-wrap">
+                        <div class="learn-level-progress-bar">
+                            <div class="learn-level-progress-fill" id="learnLevelProgressFill"></div>
+                        </div>
+                        <div class="learn-level-progress-label" id="learnLevelProgressLabel">0 of 0 lessons complete</div>
+                    </div>
+                </div>
+            </div>
+            <div id="learnModulesList">
+                <!-- Rendered by JS -->
+            </div>
+        </div>
+
+        <!-- Lesson player screen -->
+        <div id="learnLessonScreen" class="learn-screen" style="display: none;">
+            <div class="learn-lesson-topbar">
+                <button class="learn-back-btn" onclick="learnExitLesson()">← Exit</button>
+                <div class="learn-lesson-trail" id="learnLessonTrail"></div>
+                <div class="learn-lesson-xp" id="learnLessonXpBadge">+0 XP</div>
+            </div>
+
+            <div class="learn-lesson-progress">
+                <div class="learn-lesson-progress-bar">
+                    <div class="learn-lesson-progress-fill" id="learnLessonProgressFill"></div>
+                </div>
+            </div>
+
+            <div class="learn-lesson-stage">
+                <h1 class="learn-lesson-title" id="learnLessonTitle"></h1>
+                <p class="learn-lesson-summary" id="learnLessonSummary"></p>
+
+                <!-- Stages switch via .active class -->
+                <div id="learnStageContent" class="learn-stage" style="display:none;">
+                    <div id="learnContentBody" class="learn-content-body"></div>
+                    <div class="learn-stage-footer">
+                        <button class="learn-btn learn-btn-primary" onclick="learnAdvanceFromContent()">Continue →</button>
+                    </div>
+                </div>
+
+                <div id="learnStageQuiz" class="learn-stage" style="display:none;">
+                    <div class="learn-quiz-header">
+                        <div class="learn-quiz-progress" id="learnQuizProgress">Question 1 of 1</div>
+                        <div class="learn-quiz-score" id="learnQuizScore">Score: 0</div>
+                    </div>
+                    <div id="learnQuizBody"></div>
+                </div>
+
+                <div id="learnStageChallenge" class="learn-stage" style="display:none;">
+                    <div class="learn-challenge-header">
+                        <div class="learn-challenge-label">🎯 Challenge</div>
+                        <div class="learn-challenge-attempts" id="learnChallengeAttempts"></div>
+                    </div>
+                    <div id="learnChallengeBody"></div>
+                </div>
+
+                <div id="learnStageComplete" class="learn-stage" style="display:none;">
+                    <div class="learn-complete-card">
+                        <div class="learn-complete-emoji">🎉</div>
+                        <h2 class="learn-complete-title">Lesson Complete!</h2>
+                        <div class="learn-complete-xp">
+                            <span class="learn-xp-icon">⚡</span>
+                            <span>+<span id="learnCompleteXp">0</span> XP</span>
+                        </div>
+                        <div id="learnCompleteBadgeWrap" style="display:none;" class="learn-complete-badge-wrap">
+                            <div class="learn-complete-badge-label">Badge unlocked!</div>
+                            <div class="learn-complete-badge-name" id="learnCompleteBadgeName"></div>
+                        </div>
+                        <div class="learn-complete-actions">
+                            <button class="learn-btn learn-btn-secondary" onclick="learnExitLesson()">Back to Modules</button>
+                            <button class="learn-btn learn-btn-primary" id="learnContinueNextBtn" onclick="learnGoNextLesson()">Continue to Next Lesson →</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Confetti container (global to learn) -->
+        <div id="learnConfetti" class="learn-confetti"></div>
+
+        <!-- Level-up overlay -->
+        <div id="learnLevelUpOverlay" class="learn-levelup-overlay" style="display:none;">
+            <div class="learn-levelup-burst">
+                <div class="learn-levelup-emoji">🎉</div>
+                <div class="learn-levelup-headline">Level Up!</div>
+                <div class="learn-levelup-name" id="learnLevelUpName">ADEQUATE</div>
+            </div>
+        </div>
+
+        <!-- Badge unlock modal -->
+        <div id="learnBadgeModal" class="learn-modal-overlay" style="display:none;" onclick="learnCloseBadgeModal(event)">
+            <div class="learn-badge-modal-card" onclick="event.stopPropagation()">
+                <div class="learn-badge-modal-emoji" id="learnBadgeModalEmoji">🏆</div>
+                <div class="learn-badge-modal-name" id="learnBadgeModalName">Badge Name</div>
+                <div class="learn-badge-modal-desc" id="learnBadgeModalDesc">Description</div>
+                <button class="learn-btn learn-btn-primary" onclick="learnCloseBadgeModal()">Awesome!</button>
+            </div>
+        </div>
     </div>
+
+    <!-- Settings View -->
 
     <div id="settingsView" class="view">
         <div style="max-width: 720px; margin: 0 auto; padding: 16px;">

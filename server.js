@@ -1445,6 +1445,155 @@ app.post('/api/github/import', async (req, res) => {
     }
 });
 
+// ========== LEARN ENDPOINTS ==========
+
+// Compute level from cumulative XP. Thresholds match the curriculum spec:
+// <500 basic, <2000 adequate, ≥2000 expert.
+function levelForXp(xp) {
+    if (xp >= 2000) return 'expert';
+    if (xp >= 500) return 'adequate';
+    return 'basic';
+}
+
+// Walk the curriculum tree to find a lesson by id. Curriculum shape is
+// { levels: [ { lessons: [ { id, xp, badge_id, ... } ] } ] }. Tolerates a
+// bare-array export (legacy) and unknown shapes by returning null.
+function findLessonInCurriculum(curriculum, lesson_id) {
+    const levels = Array.isArray(curriculum) ? curriculum
+        : (curriculum && Array.isArray(curriculum.levels) ? curriculum.levels : null);
+    if (!levels) return null;
+    for (const lvl of levels) {
+        // Support both schemas: lessons directly on level, or grouped under modules[].
+        const directLessons = Array.isArray(lvl?.lessons) ? lvl.lessons : [];
+        for (const lesson of directLessons) {
+            if (lesson?.id === lesson_id) return lesson;
+        }
+        const modules = Array.isArray(lvl?.modules) ? lvl.modules : [];
+        for (const mod of modules) {
+            const modLessons = Array.isArray(mod?.lessons) ? mod.lessons : [];
+            for (const lesson of modLessons) {
+                if (lesson?.id === lesson_id) return lesson;
+            }
+        }
+    }
+    return null;
+}
+
+// Loads the curriculum module fresh on each call so edits to the file are
+// picked up without restarting the server. The file may not exist yet during
+// early dev — we degrade to an empty curriculum rather than 500.
+function loadCurriculum() {
+    const path = require('path');
+    const fs = require('fs');
+    const curriculumPath = path.join(__dirname, 'public', 'learn', 'curriculum.js');
+    if (!fs.existsSync(curriculumPath)) return { levels: [] };
+    delete require.cache[require.resolve(curriculumPath)];
+    return require(curriculumPath);
+}
+
+// POST /api/learn/login — upsert a learner profile and return the full row.
+app.post('/api/learn/login', (req, res) => {
+    try {
+        const { username, display_name } = req.body || {};
+        if (!username || typeof username !== 'string' || !username.trim()) {
+            return res.status(400).json({ error: 'username is required' });
+        }
+        const learner = db.upsertLearner({ username: username.trim(), display_name });
+        res.json(learner);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// GET /api/learn/me/:username — full state for one learner.
+app.get('/api/learn/me/:username', (req, res) => {
+    try {
+        const learner = db.getLearner(req.params.username);
+        if (!learner) return res.status(404).json({ error: 'Learner not found' });
+        res.json({
+            learner,
+            progress: db.getLearnerProgress(learner.username),
+            badges: db.getLearnerBadges(learner.username)
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// GET /api/learn/curriculum — serves the hot-reloadable curriculum module.
+app.get('/api/learn/curriculum', (req, res) => {
+    try {
+        res.json(loadCurriculum());
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// PATCH /api/learn/progress — record progress + award XP/badge on completion.
+// On completion: looks up the lesson's xp + badge_id in the curriculum and
+// applies them once (badges are INSERT OR IGNORE so re-completing a lesson
+// won't double-award). XP is granted every time the row newly transitions to
+// completed; we detect that by comparing the prior status to the new one.
+app.patch('/api/learn/progress', (req, res) => {
+    try {
+        const { username, lesson_id, status, score, attempts } = req.body || {};
+        if (!username || !lesson_id) {
+            return res.status(400).json({ error: 'username and lesson_id are required' });
+        }
+        const learner = db.getLearner(username);
+        if (!learner) return res.status(404).json({ error: 'Learner not found' });
+
+        // Capture prior status so we only award XP on the first completion.
+        const prior = db.getLearnerProgress(username).find(p => p.lesson_id === lesson_id);
+        const wasCompleted = prior && prior.status === 'completed';
+
+        db.upsertLessonProgress({ username, lesson_id, status, score, attempts });
+        db.bumpLearnerActivity(username);
+
+        const newBadges = [];
+        let leveledUp = false;
+        const priorLevel = learner.level;
+
+        if (status === 'completed' && !wasCompleted) {
+            const curriculum = loadCurriculum();
+            const lesson = findLessonInCurriculum(curriculum, lesson_id);
+            if (lesson) {
+                if (Number.isFinite(lesson.xp) && lesson.xp > 0) db.addXp(username, lesson.xp);
+                if (lesson.badge_id && db.addBadge(username, lesson.badge_id)) {
+                    newBadges.push(lesson.badge_id);
+                }
+            }
+            const updated = db.getLearner(username);
+            const newLevel = levelForXp(updated.total_xp);
+            if (newLevel !== priorLevel) {
+                db.setLearnerLevel(username, newLevel);
+                leveledUp = true;
+            }
+        }
+
+        res.json({
+            learner: db.getLearner(username),
+            newBadges,
+            leveledUp
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// POST /api/learn/reset — wipe a learner's progress, keep the profile row.
+app.post('/api/learn/reset', (req, res) => {
+    try {
+        const { username } = req.body || {};
+        if (!username) return res.status(400).json({ error: 'username is required' });
+        if (!db.getLearner(username)) return res.status(404).json({ error: 'Learner not found' });
+        db.resetLearner(username);
+        res.json({ ok: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Start server
 app.listen(PORT, HOST, () => {
     console.log(`\n🚀 LaunchPad - Entrepreneur's Project Tracker`);
