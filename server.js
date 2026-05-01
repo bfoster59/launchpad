@@ -127,6 +127,22 @@ app.delete('/api/projects/:id', (req, res) => {
     }
 });
 
+// Mark a project's external commits as "seen" — clears the External Activity
+// badge by syncing last_seen_commit_at to last_commit_at. Called by showProject
+// when the user opens the detail view for a project that has unseen activity.
+app.post('/api/projects/:id/mark-seen', (req, res) => {
+    try {
+        const project = db.getProject(parseInt(req.params.id));
+        if (!project) return res.status(404).json({ error: 'Project not found' });
+        if (project.last_commit_at) {
+            db.updateProject(project.id, { last_seen_commit_at: project.last_commit_at });
+        }
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Get project stats
 app.get('/api/stats', (req, res) => {
     try {
@@ -269,116 +285,147 @@ app.get('/api/github/trending', async (req, res) => {
     }
 });
 
+// Run a sync check for a single project. Returns the same shape the GET
+// /sync-status endpoint returns. Extracted so the boot-time sweep + the
+// manual "Refresh All" button can drive the same engine without duplicating
+// shell commands or DB-update rules. SAFE — read-only against the network
+// (git fetch) and only writes last_commit_at + (conservatively) auto-bumps.
+async function runSyncCheck(project) {
+    const { exec } = require('child_process');
+    const util = require('util');
+    const execPromise = util.promisify(exec);
+    const fs = require('fs');
+
+    if (!project.repo_url) return { status: 'no_repo', message: 'No GitHub repository linked' };
+    if (!project.local_path || !fs.existsSync(project.local_path)) {
+        return { status: 'not_cloned', message: 'Repository not cloned locally' };
+    }
+
+    try {
+        await execPromise(`cd "${project.local_path}" && git fetch origin 2>&1`);
+
+        const { stdout: statusOut } = await execPromise(`cd "${project.local_path}" && git status --porcelain`);
+        const hasUncommitted = statusOut.trim().length > 0;
+
+        const { stdout: unpushedOut } = await execPromise(`cd "${project.local_path}" && git log origin/$(git rev-parse --abbrev-ref HEAD)..HEAD --oneline 2>&1 || echo ""`);
+        const hasUnpushed = unpushedOut.trim().length > 0 && !unpushedOut.includes('fatal');
+
+        const { stdout: behindOut } = await execPromise(`cd "${project.local_path}" && git log HEAD..origin/$(git rev-parse --abbrev-ref HEAD) --pretty=format:"%h|%an|%s" 2>&1 || echo ""`);
+        const isBehind = behindOut.trim().length > 0 && !behindOut.includes('fatal');
+        const incomingCommits = isBehind
+            ? behindOut.trim().split('\n').slice(0, 20).map(line => {
+                const [hash, author, ...msgParts] = line.split('|');
+                return { hash, author, message: msgParts.join('|') };
+              })
+            : [];
+
+        const { stdout: branchOut } = await execPromise(`cd "${project.local_path}" && git rev-parse --abbrev-ref HEAD`);
+        const currentBranch = branchOut.trim();
+
+        let defaultBranch = null;
+        try {
+            const { stdout: defOut } = await execPromise(`cd "${project.local_path}" && git symbolic-ref --short refs/remotes/origin/HEAD 2>&1`);
+            defaultBranch = defOut.trim().replace(/^origin\//, '') || null;
+        } catch (e) { /* fall through to remote show */ }
+        if (!defaultBranch) {
+            try {
+                const { stdout: rs } = await execPromise(`cd "${project.local_path}" && git remote show origin 2>&1`);
+                const m = /HEAD branch:\s*(\S+)/.exec(rs);
+                if (m && m[1] !== '(unknown)') defaultBranch = m[1];
+            } catch (e) { /* leave null — UI suppresses warning when null */ }
+        }
+
+        const { stdout: lastCommitOut } = await execPromise(`cd "${project.local_path}" && git log -1 --format="%h|%s|%ar|%at"`);
+        const [hash, message, timeAgo, atUnixStr] = lastCommitOut.trim().split('|');
+        const lastCommitAt = parseInt(atUnixStr) || null;
+
+        if (lastCommitAt) {
+            const updates = { last_commit_at: lastCommitAt };
+            const ageDays = (Date.now() / 1000 - lastCommitAt) / 86400;
+            if (project.status === 'idea' && ageDays <= 7) {
+                updates.status = 'building';
+            }
+            db.updateProject(project.id, updates);
+            if (updates.status) {
+                db.addUpdate({
+                    project_id: project.id,
+                    type: 'progress',
+                    title: 'Auto-bumped status',
+                    content: `idea → building (recent github activity, last commit ${Math.round(ageDays * 24)}h ago)`
+                });
+            }
+        }
+
+        let status = 'synced';
+        const messages = [];
+        if (hasUncommitted) { status = 'dirty'; messages.push('Uncommitted changes'); }
+        if (hasUnpushed) { status = 'unpushed'; messages.push('Unpushed commits'); }
+        if (isBehind) { status = 'behind'; messages.push('Behind remote - pull needed'); }
+        if (status === 'synced') messages.push('Up to date with remote');
+
+        return {
+            status,
+            messages,
+            details: {
+                branch: currentBranch,
+                defaultBranch,
+                onDefaultBranch: defaultBranch ? currentBranch === defaultBranch : null,
+                lastCommit: { hash, message, timeAgo },
+                hasUncommitted, hasUnpushed, isBehind, incomingCommits
+            }
+        };
+    } catch (gitError) {
+        return { status: 'error', message: 'Git error: ' + gitError.message, details: { error: gitError.message } };
+    }
+}
+
+// Run runSyncCheck across many projects with a small concurrency cap so we
+// don't fork 39 git processes simultaneously. Returns a { id, status }-shaped
+// summary. Errors per-project are caught — one bad repo can't poison the sweep.
+async function runSyncSweep(projects, concurrency = 4) {
+    const results = [];
+    let i = 0;
+    async function worker() {
+        while (i < projects.length) {
+            const p = projects[i++];
+            try {
+                const r = await runSyncCheck(p);
+                results.push({ id: p.id, name: p.name, status: r.status });
+            } catch (e) {
+                results.push({ id: p.id, name: p.name, status: 'error', error: e.message });
+            }
+        }
+    }
+    const workers = Array.from({ length: Math.min(concurrency, projects.length) }, () => worker());
+    await Promise.all(workers);
+    return results;
+}
+
 // Check GitHub sync status
 app.get('/api/projects/:id/sync-status', async (req, res) => {
     try {
-        const { exec } = require('child_process');
-        const util = require('util');
-        const execPromise = util.promisify(exec);
-        const fs = require('fs');
-        
         const project = db.getProject(parseInt(req.params.id));
-        if (!project) {
-            return res.status(404).json({ error: 'Project not found' });
-        }
-        
-        if (!project.repo_url) {
-            return res.json({ status: 'no_repo', message: 'No GitHub repository linked' });
-        }
-        
-        if (!project.local_path || !fs.existsSync(project.local_path)) {
-            return res.json({ status: 'not_cloned', message: 'Repository not cloned locally' });
-        }
-        
-        // Check git status
-        try {
-            // Fetch latest from remote
-            await execPromise(`cd "${project.local_path}" && git fetch origin 2>&1`);
-            
-            // Check for uncommitted changes
-            const { stdout: statusOut } = await execPromise(`cd "${project.local_path}" && git status --porcelain`);
-            const hasUncommitted = statusOut.trim().length > 0;
-            
-            // Check for unpushed commits
-            const { stdout: unpushedOut } = await execPromise(`cd "${project.local_path}" && git log origin/$(git rev-parse --abbrev-ref HEAD)..HEAD --oneline 2>&1 || echo ""`);
-            const hasUnpushed = unpushedOut.trim().length > 0 && !unpushedOut.includes('fatal');
-            
-            // Check if behind remote
-            const { stdout: behindOut } = await execPromise(`cd "${project.local_path}" && git log HEAD..origin/$(git rev-parse --abbrev-ref HEAD) --oneline 2>&1 || echo ""`);
-            const isBehind = behindOut.trim().length > 0 && !behindOut.includes('fatal');
-            
-            // Get current branch
-            const { stdout: branchOut } = await execPromise(`cd "${project.local_path}" && git rev-parse --abbrev-ref HEAD`);
-            const currentBranch = branchOut.trim();
-            
-            // Get last commit info — also pull the unix timestamp so we can
-            // persist it for the Most Active sort + activity-based status auto-bump.
-            const { stdout: lastCommitOut } = await execPromise(`cd "${project.local_path}" && git log -1 --format="%h|%s|%ar|%at"`);
-            const [hash, message, timeAgo, atUnixStr] = lastCommitOut.trim().split('|');
-            const lastCommitAt = parseInt(atUnixStr) || null;
+        if (!project) return res.status(404).json({ error: 'Project not found' });
+        const result = await runSyncCheck(project);
+        res.json(result);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
 
-            // Persist last_commit_at + (conservatively) auto-bump idea→building
-            // when the most recent commit is recent. NEVER touches paused/launched/
-            // planning — those are explicit user choices.
-            if (lastCommitAt) {
-                const updates = { last_commit_at: lastCommitAt };
-                const ageDays = (Date.now() / 1000 - lastCommitAt) / 86400;
-                if (project.status === 'idea' && ageDays <= 7) {
-                    updates.status = 'building';
-                }
-                db.updateProject(project.id, updates);
-                if (updates.status) {
-                    db.addUpdate({
-                        project_id: project.id,
-                        type: 'progress',
-                        title: 'Auto-bumped status',
-                        content: `idea → building (recent github activity, last commit ${Math.round(ageDays * 24)}h ago)`
-                    });
-                }
-            }
-            
-            let status = 'synced';
-            let messages = [];
-            
-            if (hasUncommitted) {
-                status = 'dirty';
-                messages.push('Uncommitted changes');
-            }
-            if (hasUnpushed) {
-                status = 'unpushed';
-                messages.push('Unpushed commits');
-            }
-            if (isBehind) {
-                status = 'behind';
-                messages.push('Behind remote - pull needed');
-            }
-            
-            if (status === 'synced') {
-                messages.push('Up to date with remote');
-            }
-            
-            res.json({
-                status,
-                messages,
-                details: {
-                    branch: currentBranch,
-                    lastCommit: {
-                        hash,
-                        message,
-                        timeAgo
-                    },
-                    hasUncommitted,
-                    hasUnpushed,
-                    isBehind
-                }
-            });
-        } catch (gitError) {
-            res.json({ 
-                status: 'error', 
-                message: 'Git error: ' + gitError.message,
-                details: { error: gitError.message }
-            });
-        }
+// Manual "Refresh All" — same engine the boot sweep runs, fired on demand.
+app.post('/api/projects/refresh-all', async (req, res) => {
+    try {
+        const fs = require('fs');
+        const all = db.getAllProjects();
+        const cloned = all.filter(p => p.local_path && fs.existsSync(p.local_path) && p.repo_url);
+        console.log(`[refresh-all] sweeping ${cloned.length} cloned projects`);
+        const results = await runSyncSweep(cloned, 4);
+        res.json({
+            scanned: cloned.length,
+            skipped: all.length - cloned.length,
+            results
+        });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -819,6 +866,118 @@ app.post('/api/projects/:id/launch', async (req, res) => {
 
         return res.status(400).json({
             error: 'No recognized launch target (no package.json dev/start, no live_url)'
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Preview what `git add -A` would stage. Returns the file list plus warnings
+// about secrets, unusually large files, and binaries. Used by the commit modal
+// to surface a diff preview BEFORE the user fires off git add + commit.
+//
+// Secret patterns are intentionally conservative — we'd rather false-positive
+// on a `notes.env-example` than miss `.env`. The list mirrors common GitHub
+// secret-scanning rules.
+const SECRET_PATTERNS = [
+    /(^|\/)\.env(\.|$)/i,                 // .env, .env.local, .env.production
+    /(^|\/)\.env$/i,
+    /\.(key|pem|p12|pfx|jks|keystore)$/i, // private keys / keystores
+    /(^|\/)id_(rsa|dsa|ecdsa|ed25519)$/i, // SSH private keys
+    /(^|\/)credentials(\.|$)/i,           // credentials, credentials.json
+    /(^|\/)secrets?(\.|$)/i,              // secret(s), secret.json
+    /(^|\/)\.aws\//i,
+    /(^|\/)\.ssh\//i,
+    /(^|\/)\.git-credentials$/i,
+    /(^|\/)\.npmrc$/i,                    // can contain auth tokens
+    /\.htpasswd$/i,
+    /service-?account.*\.json$/i          // GCP / Firebase service accounts
+];
+const BIG_FILE_BYTES = 5 * 1024 * 1024; // 5MB
+
+// Map a single porcelain status code (XY) to a human label.
+function statusLabel(xy) {
+    const c = (xy || '').trim();
+    if (c === 'A' || c === 'AA' || c === 'AM' || c === '??') return 'added';
+    if (c === 'M' || c === 'MM' || c === 'AM') return 'modified';
+    if (c === 'D' || c === 'AD') return 'deleted';
+    if (c === 'R' || c.startsWith('R')) return 'renamed';
+    if (c === 'C' || c.startsWith('C')) return 'copied';
+    if (c === 'U' || c.includes('U')) return 'conflicted';
+    return 'changed';
+}
+
+app.get('/api/projects/:id/staged-preview', async (req, res) => {
+    try {
+        const { exec } = require('child_process');
+        const util = require('util');
+        const execPromise = util.promisify(exec);
+        const fs = require('fs');
+        const path = require('path');
+
+        const project = db.getProject(parseInt(req.params.id));
+        if (!project) return res.status(404).json({ error: 'Project not found' });
+        if (!project.local_path || !fs.existsSync(project.local_path)) {
+            return res.status(400).json({ error: 'Repository not cloned locally' });
+        }
+
+        const cwd = project.local_path;
+        const shq = (s) => `"${s.replace(/"/g, '\\"')}"`;
+
+        // git status --porcelain shows ALL changes (staged, unstaged, untracked).
+        // Since the commit modal does git add -A first, every line here will end
+        // up staged. We surface them all so the user sees what's about to land.
+        const { stdout: porcelain } = await execPromise(`cd ${shq(cwd)} && git status --porcelain`);
+        const lines = porcelain.split('\n').filter(l => l.trim().length > 0);
+
+        const files = [];
+        const warnings = [];
+        let totalSize = 0;
+
+        for (const line of lines) {
+            // Porcelain format: "XY filepath" — XY is 2 chars (status), then space, then path.
+            // Renames look like "R  old -> new"; we only care about the new name.
+            const code = line.substring(0, 2);
+            let filePath = line.substring(3).trim();
+            if (filePath.includes(' -> ')) {
+                filePath = filePath.split(' -> ')[1].trim();
+            }
+            // Strip surrounding quotes git adds for paths with spaces
+            if (filePath.startsWith('"') && filePath.endsWith('"')) {
+                filePath = filePath.slice(1, -1).replace(/\\"/g, '"');
+            }
+
+            const status = statusLabel(code);
+            let size = 0;
+            try {
+                const fullPath = path.join(cwd, filePath);
+                if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
+                    size = fs.statSync(fullPath).size;
+                    totalSize += size;
+                }
+            } catch (e) { /* deleted files / permission errors — leave size 0 */ }
+
+            const isSecret = SECRET_PATTERNS.some(p => p.test(filePath));
+            const isBig = size > BIG_FILE_BYTES;
+
+            if (isSecret) {
+                warnings.push({ type: 'secret', file: filePath,
+                    message: `${filePath} matches a known-secret pattern (.env, *.key, credentials, etc.)` });
+            }
+            if (isBig) {
+                warnings.push({ type: 'big', file: filePath,
+                    message: `${filePath} is ${(size / 1024 / 1024).toFixed(1)} MB — over the 5 MB threshold` });
+            }
+
+            files.push({ path: filePath, status, size, isSecret, isBig });
+        }
+
+        res.json({
+            count: files.length,
+            totalSize,
+            files,
+            warnings,
+            hasBlockers: warnings.length > 0
         });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -1288,6 +1447,33 @@ app.listen(PORT, HOST, () => {
     console.log(`   Local:   http://localhost:${PORT}`);
     console.log(`   Network: http://192.168.5.102:${PORT}`);
     console.log(`\n📊 Ready to track your empire\n`);
+
+    // T1.6 — boot-time sync sweep. Defer 2s so the server is fully responsive
+    // before we start fanning out git fetch calls. Concurrency 4 keeps load
+    // sane on Bob's 39+ project list. All side effects are limited to
+    // last_commit_at + the existing idea→building auto-bump (skips
+    // paused/launched/planning/infrastructure).
+    setTimeout(() => {
+        try {
+            const fs = require('fs');
+            const all = db.getAllProjects();
+            const cloned = all.filter(p => p.local_path && fs.existsSync(p.local_path) && p.repo_url);
+            if (cloned.length === 0) return;
+            console.log(`[boot-sweep] checking ${cloned.length} cloned projects (concurrency 4)...`);
+            const t0 = Date.now();
+            runSyncSweep(cloned, 4)
+                .then(results => {
+                    const summary = results.reduce((acc, r) => {
+                        acc[r.status] = (acc[r.status] || 0) + 1;
+                        return acc;
+                    }, {});
+                    console.log(`[boot-sweep] done in ${((Date.now() - t0) / 1000).toFixed(1)}s —`, summary);
+                })
+                .catch(err => console.error('[boot-sweep] failed:', err.message));
+        } catch (e) {
+            console.error('[boot-sweep] schedule failed:', e.message);
+        }
+    }, 2000);
 });
 
 // Graceful shutdown

@@ -48,7 +48,10 @@
     <div id="myProjectsView" class="view">
         <div class="section-header">
             <h2>My Projects</h2>
-            <button class="btn btn-primary" onclick="showAddProject()">+ New Project</button>
+            <div style="display: flex; gap: 8px;">
+                <button class="btn btn-secondary" id="refreshAllBtn" onclick="refreshAllProjects()" title="Re-check every cloned project against GitHub">🔄 Refresh All</button>
+                <button class="btn btn-primary" onclick="showAddProject()">+ New Project</button>
+            </div>
         </div>
         <div id="myProjectsList" class="project-grid"></div>
     </div>
@@ -215,6 +218,20 @@
         <div style="background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 32px; max-width: 640px; margin: 0 auto;">
             <h2 style="margin-bottom: 8px; color: #fff;">💾 Commit / Push</h2>
             <div id="commitContext" style="color: #888; margin-bottom: 20px; font-size: 0.9rem;"></div>
+
+            <!-- Diff preview — populated by openCommitModal via /staged-preview.
+                 Shows every file git add -A would stage, with size and a warning
+                 chip on anything matching a known-secret pattern or >5 MB. -->
+            <div id="commitPreview" style="margin-bottom: 16px; padding: 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; max-height: 240px; overflow-y: auto; font-size: 0.85rem;">
+                <div style="color: #888;">Loading staged changes…</div>
+            </div>
+            <!-- Override checkbox — only shown when warnings exist. -->
+            <div id="commitOverrideWrap" style="display: none; margin-bottom: 16px;">
+                <label style="display: flex; gap: 8px; align-items: center; color: #fbbf24; cursor: pointer;">
+                    <input type="checkbox" id="commitOverride">
+                    <span>I've reviewed the warnings above and want to commit anyway</span>
+                </label>
+            </div>
 
             <div style="margin-bottom: 16px;">
                 <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Commit message</label>

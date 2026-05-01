@@ -260,6 +260,7 @@ function showAddProject() {
                                 <option value="planning">📋 Planning</option>
                                 <option value="building">🔨 Building</option>
                                 <option value="launched">🚀 Launched</option>
+                                <option value="infrastructure">🏗️ Infrastructure</option>
                             </select>
                         </div>
                         <div>
@@ -478,11 +479,19 @@ function renderProjectCard(p) {
         syncBadge = `<span class="neo-sync-badge ${badgeClass}" style="margin-left: 6px;">${icon} ${label}</span>`;
     }
 
+    // External activity badge — last_commit_at is what github reported on
+    // the most recent sync; last_seen_commit_at is what the user has opened.
+    // Cleared automatically when the detail view is opened.
+    let externalBadge = '';
+    if (p.last_commit_at && p.last_commit_at > (p.last_seen_commit_at || 0)) {
+        externalBadge = `<span title="New github activity since you last opened this project" style="background: #2563eb; color: #fff; padding: 2px 8px; border-radius: 999px; font-size: 0.7rem; font-weight: 600; margin-left: 6px;">↗ External</span>`;
+    }
+
     return `
         <div class="project-card" onclick="showProject(${p.id})">
             <div style="display: flex; justify-content: space-between; align-items: start; gap: 8px;">
                 <div class="project-status status-${p.status}">${p.status}</div>
-                ${syncBadge}
+                <div>${externalBadge}${syncBadge}</div>
             </div>
             <div class="project-name">${sourceIcon} ${localIcon} ${p.name}</div>
             <div class="project-description">${p.description || 'No description'}</div>
@@ -517,6 +526,22 @@ async function showProject(id) {
         _ensureDetailDom();
         const response = await fetch(`/api/projects/${id}`);
         currentProject = await response.json();
+
+        // Acknowledge external activity — this clears the "↗ External" badge
+        // by setting last_seen_commit_at = last_commit_at on the server.
+        // Fire-and-forget so the detail render isn't blocked.
+        if (currentProject.last_commit_at &&
+            (currentProject.last_commit_at > (currentProject.last_seen_commit_at || 0))) {
+            fetch(`/api/projects/${id}/mark-seen`, { method: 'POST' }).catch(() => {});
+            // Mirror locally so card lists stop showing the badge before reload.
+            const lists = [typeof projects !== 'undefined' ? projects : null,
+                           typeof neoProjects !== 'undefined' ? neoProjects : null];
+            lists.forEach(l => {
+                if (!l) return;
+                const p = l.find(x => x.id === id);
+                if (p) p.last_seen_commit_at = p.last_commit_at;
+            });
+        }
 
         document.getElementById('detailTitle').textContent = currentProject.name;
         document.getElementById('detailDescription').textContent = currentProject.description || '';
@@ -757,6 +782,7 @@ async function editProject() {
                             <option value="building" ${currentProject.status === 'building' ? 'selected' : ''}>🔨 Building</option>
                             <option value="launched" ${currentProject.status === 'launched' ? 'selected' : ''}>🚀 Launched</option>
                             <option value="paused" ${currentProject.status === 'paused' ? 'selected' : ''}>⏸️ Paused</option>
+                            <option value="infrastructure" ${currentProject.status === 'infrastructure' ? 'selected' : ''}>🏗️ Infrastructure</option>
                         </select>
                     </div>
                     <div>
@@ -1015,7 +1041,93 @@ function openCommitModal(opts) {
     document.getElementById('commitResult').textContent = '';
     document.getElementById('commitSubmitBtn').disabled = false;
     document.getElementById('commitSubmitBtn').textContent = 'Commit';
+    // Reset + load the diff preview. While it's in flight the submit button is
+    // disabled — we don't want users firing off a commit before they see what's
+    // about to be staged.
+    document.getElementById('commitOverrideWrap').style.display = 'none';
+    document.getElementById('commitOverride').checked = false;
+    loadCommitPreview();
     setTimeout(() => document.getElementById('commitMessage').focus(), 50);
+}
+
+// Cached preview state so submitCommit can re-check before sending.
+let _commitPreviewState = null;
+
+async function loadCommitPreview() {
+    const el = document.getElementById('commitPreview');
+    const submitBtn = document.getElementById('commitSubmitBtn');
+    el.innerHTML = '<div style="color: #888;">Scanning staged changes…</div>';
+    submitBtn.disabled = true;
+    _commitPreviewState = null;
+
+    try {
+        const res = await fetch(`/api/projects/${currentProject.id}/staged-preview`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Preview failed');
+        _commitPreviewState = data;
+
+        if (data.count === 0) {
+            el.innerHTML = '<div style="color: #888;">Nothing staged — working tree is clean.</div>';
+            submitBtn.disabled = false;
+            return;
+        }
+
+        const warnEls = data.warnings.length ? `
+            <div style="margin-bottom: 10px; padding: 10px; background: #2d1818; border: 1px solid #ef4444; border-radius: 6px; color: #fca5a5;">
+                <div style="font-weight: 700; margin-bottom: 6px;">⚠️ ${data.warnings.length} warning${data.warnings.length > 1 ? 's' : ''}</div>
+                ${data.warnings.map(w => `<div style="font-family: monospace; font-size: 0.8rem;">• ${escapeHtml(w.message)}</div>`).join('')}
+            </div>
+        ` : '';
+
+        const fileRows = data.files.map(f => {
+            const sizeKb = f.size > 0 ? `${(f.size / 1024).toFixed(1)} KB` : '—';
+            const chips = [
+                f.isSecret ? '<span style="background: #ef4444; color: #fff; padding: 1px 6px; border-radius: 4px; font-size: 0.7rem; margin-left: 6px;">SECRET?</span>' : '',
+                f.isBig ? '<span style="background: #f59e0b; color: #000; padding: 1px 6px; border-radius: 4px; font-size: 0.7rem; margin-left: 6px;">LARGE</span>' : ''
+            ].join('');
+            const statusColor = ({
+                added: '#22c55e', modified: '#f59e0b', deleted: '#ef4444',
+                renamed: '#60a5fa', copied: '#60a5fa', conflicted: '#ef4444', changed: '#888'
+            })[f.status] || '#888';
+            return `
+                <div style="display: flex; gap: 8px; align-items: center; padding: 4px 0; border-bottom: 1px dashed #222;">
+                    <span style="color: ${statusColor}; font-weight: 600; font-size: 0.75rem; text-transform: uppercase; min-width: 70px;">${f.status}</span>
+                    <span style="font-family: monospace; flex: 1; color: #e0e0e0; word-break: break-all;">${escapeHtml(f.path)}</span>
+                    <span style="color: #666; font-size: 0.75rem;">${sizeKb}</span>
+                    ${chips}
+                </div>
+            `;
+        }).join('');
+
+        el.innerHTML = `
+            ${warnEls}
+            <div style="color: #888; margin-bottom: 8px;">${data.count} file${data.count > 1 ? 's' : ''} will be staged (${(data.totalSize / 1024).toFixed(1)} KB total)</div>
+            ${fileRows}
+        `;
+
+        // Gate the submit button: warnings require explicit override.
+        const overrideWrap = document.getElementById('commitOverrideWrap');
+        const override = document.getElementById('commitOverride');
+        if (data.hasBlockers) {
+            overrideWrap.style.display = 'block';
+            submitBtn.disabled = true;
+            override.onchange = () => {
+                submitBtn.disabled = !override.checked;
+            };
+        } else {
+            overrideWrap.style.display = 'none';
+            submitBtn.disabled = false;
+        }
+    } catch (e) {
+        el.innerHTML = `<div style="color: #ef4444;">Preview failed: ${escapeHtml(e.message)}</div>`;
+        submitBtn.disabled = false; // Allow commit anyway — preview is advisory
+    }
+}
+
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[c]);
 }
 
 function closeCommitModal() {
@@ -1035,6 +1147,17 @@ async function submitCommit() {
     if (!addAll && !push) {
         alert('Nothing to do — enable either "stage changes" or "push".');
         return;
+    }
+    // Hard gate: if the preview flagged warnings (secrets / big files), the
+    // override checkbox must be explicitly checked. Belt-and-suspenders — the
+    // submit button is also disabled in that case, but a careful user could
+    // still manage to call this directly.
+    if (addAll && _commitPreviewState && _commitPreviewState.hasBlockers) {
+        const ov = document.getElementById('commitOverride');
+        if (!ov || !ov.checked) {
+            alert('This commit has warnings (secrets or large files). Tick the override box to confirm.');
+            return;
+        }
     }
 
     const submitBtn = document.getElementById('commitSubmitBtn');
@@ -1181,26 +1304,55 @@ async function checkSyncStatus() {
         }
         
         if (data.details && data.details.lastCommit) {
+            // T1.4 — branch warning. If the remote tells us a default branch
+            // and we're not on it, render the branch in yellow with a note.
+            // onDefaultBranch === null means we couldn't determine the default,
+            // so no warning is shown (better than a false alarm).
+            const branchOffDefault = data.details.onDefaultBranch === false;
+            const branchHTML = branchOffDefault
+                ? `<div style="color: #fbbf24;"><strong>Branch:</strong> ${escapeHtml(data.details.branch)} ⚠️ <em>not the default branch (${escapeHtml(data.details.defaultBranch)})</em></div>`
+                : `<div><strong>Branch:</strong> ${escapeHtml(data.details.branch)}${data.details.defaultBranch ? ` <span style="color: #555;">(default)</span>` : ''}</div>`;
             statusHTML += `
                 <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #333; font-size: 0.9rem; color: #888;">
-                    <div><strong>Branch:</strong> ${data.details.branch}</div>
-                    <div><strong>Last commit:</strong> ${data.details.lastCommit.hash} - ${data.details.lastCommit.message}</div>
-                    <div><strong>When:</strong> ${data.details.lastCommit.timeAgo}</div>
+                    ${branchHTML}
+                    <div><strong>Last commit:</strong> ${escapeHtml(data.details.lastCommit.hash)} - ${escapeHtml(data.details.lastCommit.message)}</div>
+                    <div><strong>When:</strong> ${escapeHtml(data.details.lastCommit.timeAgo)}</div>
                 </div>
             `;
         }
 
-        // Action buttons appropriate to the sync state
+        // T1.5 — Pull preview. When behind, list the incoming commits ABOVE
+        // the Pull button so the user sees what will land before they click.
+        if (data.status === 'behind' && data.details && data.details.incomingCommits && data.details.incomingCommits.length) {
+            const rows = data.details.incomingCommits.map(c => `
+                <div style="font-family: monospace; font-size: 0.8rem; padding: 3px 0; border-bottom: 1px dashed #222;">
+                    <span style="color: #60a5fa;">${escapeHtml(c.hash)}</span>
+                    <span style="color: #888;"> · ${escapeHtml(c.author || 'unknown')}</span>
+                    <span style="color: #e0e0e0;"> — ${escapeHtml(c.message || '')}</span>
+                </div>
+            `).join('');
+            statusHTML += `
+                <div style="margin-top: 12px; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px;">
+                    <div style="color: #fbbf24; font-weight: 600; margin-bottom: 6px;">⬇ ${data.details.incomingCommits.length} incoming commit${data.details.incomingCommits.length > 1 ? 's' : ''}:</div>
+                    ${rows}
+                </div>
+            `;
+        }
+
+        // Action buttons appropriate to the sync state. Commit button is
+        // stamped with the current branch so the user knows where the push
+        // will land (T1.4 reinforcement).
         const actions = [];
+        const branchLabel = data.details && data.details.branch ? ` to ${data.details.branch}` : '';
         if (data.status === 'dirty' || data.status === 'unpushed') {
             const needsCommit = data.status === 'dirty';
-            actions.push(`<button class="btn btn-primary" onclick="showCommitDialog(${needsCommit ? 'true' : 'false'})">💾 Commit ${needsCommit ? '& ' : ''}Push</button>`);
+            actions.push(`<button class="btn btn-primary" onclick="showCommitDialog(${needsCommit ? 'true' : 'false'})">💾 Commit ${needsCommit ? '& ' : ''}Push${branchLabel}</button>`);
         }
         if (data.status === 'behind') {
-            actions.push(`<button class="btn btn-primary" onclick="pullProject()">⬇️ Pull (ff-only)</button>`);
+            actions.push(`<button class="btn btn-primary" onclick="pullProject()">⬇️ Pull (ff-only)${branchLabel}</button>`);
         }
         if (actions.length) {
-            statusHTML += `<div style="margin-top: 12px; display: flex; gap: 8px;">${actions.join('')}</div>`;
+            statusHTML += `<div style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap;">${actions.join('')}</div>`;
         }
 
         statusHTML += `</div>`;
@@ -2118,6 +2270,33 @@ async function checkSingleSync(projectId) {
         }
     } catch (err) {
         alert('Failed to check sync status: ' + err.message);
+    }
+}
+
+// T1.6 — Refresh All. Hits the server endpoint that runs the same sweep used
+// at boot. Reloads project state afterwards so external-activity badges and
+// last_commit_at sort orders update without a manual page refresh.
+async function refreshAllProjects() {
+    const btn = document.getElementById('refreshAllBtn');
+    if (!btn) return;
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = '⏳ Refreshing…';
+    try {
+        const res = await fetch('/api/projects/refresh-all', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Refresh failed');
+        // Reload the canonical project list so all fields (last_commit_at,
+        // status auto-bumps) come back fresh.
+        await loadProjects();
+        if (typeof showToast === 'function') {
+            showToast(`Refreshed ${data.scanned} project${data.scanned !== 1 ? 's' : ''}`);
+        }
+    } catch (e) {
+        alert('Refresh failed: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = original;
     }
 }
 

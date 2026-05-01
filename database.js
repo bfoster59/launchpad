@@ -73,6 +73,11 @@ class LaunchpadDB {
         tryAlter('ALTER TABLE projects ADD COLUMN stack TEXT');
         tryAlter('ALTER TABLE projects ADD COLUMN references_json TEXT');
         tryAlter('ALTER TABLE projects ADD COLUMN last_commit_at INTEGER');
+        // Marker for "last commit the user has been shown / acknowledged".
+        // Updated when the user opens the project detail view. If
+        // last_commit_at > last_seen_commit_at the card shows an
+        // "External activity" badge so they notice github-side commits.
+        tryAlter('ALTER TABLE projects ADD COLUMN last_seen_commit_at INTEGER');
     }
 
     // ========== SETTINGS ==========
@@ -163,7 +168,7 @@ class LaunchpadDB {
                          'target_market', 'monetization', 'pricing', 'repo_url', 'live_url',
                          'local_path', 'source', 'readme',
                          'prompt', 'prd', 'stack', 'references_json',
-                         'last_commit_at'];
+                         'last_commit_at', 'last_seen_commit_at'];
         
         allowed.forEach(field => {
             if (updates[field] !== undefined) {
