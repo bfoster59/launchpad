@@ -1029,6 +1029,14 @@ h2, h3 {
     font-weight: 600;
 }
 
+.learn-section-subtitle {
+    color: #888;
+    font-size: 0.9rem;
+    margin-top: -8px;
+    margin-bottom: 16px;
+    line-height: 1.5;
+}
+
 /* ---------- Recommended skills card ---------- */
 .learn-recommend-card {
     display: flex;

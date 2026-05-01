@@ -2669,7 +2669,11 @@ function _learnRenderRecommendations() {
             <a href="${r.repo}" target="_blank" class="learn-btn learn-btn-secondary" style="text-decoration:none;display:inline-block;">View on GitHub →</a>
         </div>
     `).join('');
-    section.innerHTML = `<h2 class="learn-section-title">📚 Recommended Skills</h2>${cardsHtml}`;
+    section.innerHTML = `
+        <h2 class="learn-section-title">🔌 Optional Power Tools</h2>
+        <p class="learn-section-subtitle">Install these to put what you learn into practice — none are required to complete the curriculum.</p>
+        ${cardsHtml}
+    `;
 }
 
 function _learnRenderLevels() {
