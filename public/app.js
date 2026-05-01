@@ -1680,9 +1680,23 @@ function setExploreTab(key) {
     loadExplore();
 }
 
+function clearExploreFilters() {
+    const lang = document.getElementById('discoverLanguage');
+    const topic = document.getElementById('exploreTopic');
+    const user = document.getElementById('exploreUser');
+    const range = document.getElementById('exploreRange');
+    if (lang) lang.value = '';
+    if (topic) topic.value = '';
+    if (user) user.value = '';
+    if (range) range.value = 'monthly';
+    loadExplore();
+}
+
 async function loadExplore() {
     const range = document.getElementById('exploreRange')?.value || 'monthly';
     const lang = document.getElementById('discoverLanguage')?.value || '';
+    const topic = document.getElementById('exploreTopic')?.value.trim() || '';
+    const user = document.getElementById('exploreUser')?.value.trim() || '';
     const activeKey = getExploreTab();
 
     // Render tab bar (always — even while results load)
@@ -1699,6 +1713,8 @@ async function loadExplore() {
 
     const params = new URLSearchParams({ category: activeKey, since: range });
     if (lang) params.set('language', lang);
+    if (topic) params.set('topic', topic);
+    if (user) params.set('user', user);
 
     try {
         const response = await fetch(`/api/github/explore?${params.toString()}`);

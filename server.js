@@ -258,7 +258,8 @@ app.get('/api/github/search', async (req, res) => {
 // toward unfinished projects, which isn't what we want here.
 app.get('/api/github/explore', async (req, res) => {
     try {
-        const { language = '', since = 'monthly', category = 'trending' } = req.query;
+        const { language = '', since = 'monthly', category = 'trending',
+                topic = '', user = '' } = req.query;
 
         const now = new Date();
         const ranges = {
@@ -269,15 +270,31 @@ app.get('/api/github/explore', async (req, res) => {
         };
         const ms = ranges[since] || ranges.monthly;
         const sinceDate = new Date(now - ms).toISOString().split('T')[0];
-        const langQ = language ? ` language:${language}` : '';
+
+        // Sanitise free-text filters before building qualifiers — github's
+        // search syntax is whitespace-separated, so a stray space would
+        // silently turn into a second qualifier. Allow the actual chars github
+        // accepts (alphanumeric, dash, underscore, dot, slash).
+        const clean = (s) => String(s || '').trim().replace(/[^a-zA-Z0-9._\-\/]/g, '');
+        const langQ = language ? ` language:${clean(language)}` : '';
+        const topicQ = topic ? ` topic:${clean(topic)}` : '';
+        const userQ = user ? ` user:${clean(user)}` : '';
+        const filters = `${langQ}${topicQ}${userQ}`;
 
         // Each category: { q, sort, order } passed straight to search.repos.
+        // When a user filter is set, we relax the stars floors — small/personal
+        // repos won't pass them. Keeping a date floor on time-window tabs.
+        const dateGate = userQ ? '' : ` stars:>10`;
+        const popGate = userQ ? '' : ` stars:>500`;
+        const forkGate = userQ ? '' : ` forks:>50`;
+        const popAllTime = userQ ? `stars:>0` : `stars:>1000`;
+
         const categories = {
-            trending:  { q: `created:>${sinceDate} stars:>10${langQ}`,    sort: 'stars',   order: 'desc' },
-            popular:   { q: `stars:>1000${langQ}`,                         sort: 'stars',   order: 'desc' },
-            new:       { q: `created:>${sinceDate} stars:>5${langQ}`,      sort: 'stars',   order: 'desc' },
-            discussed: { q: `pushed:>${sinceDate} stars:>500${langQ}`,     sort: 'updated', order: 'desc' },
-            forked:    { q: `created:>${sinceDate} forks:>50${langQ}`,     sort: 'forks',   order: 'desc' }
+            trending:  { q: `created:>${sinceDate}${dateGate}${filters}`,             sort: 'stars',   order: 'desc' },
+            popular:   { q: `${popAllTime}${filters}`,                                 sort: 'stars',   order: 'desc' },
+            new:       { q: `created:>${sinceDate}${userQ ? '' : ' stars:>5'}${filters}`, sort: 'stars',   order: 'desc' },
+            discussed: { q: `pushed:>${sinceDate}${popGate}${filters}`,                sort: 'updated', order: 'desc' },
+            forked:    { q: `created:>${sinceDate}${forkGate}${filters}`,              sort: 'forks',   order: 'desc' }
         };
 
         const cat = categories[category];

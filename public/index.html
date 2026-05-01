@@ -170,19 +170,98 @@
                 <input type="text" id="searchInput" placeholder="Search GitHub (e.g. nextjs starter)"
                        style="padding: 8px 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; width: 280px;"
                        onkeypress="if(event.key==='Enter') searchGitHub()">
-                <select id="discoverLanguage" onchange="loadExplore()" style="padding: 8px 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">
-                    <option value="">Any language</option>
-                    <option value="TypeScript">TypeScript</option>
-                    <option value="JavaScript">JavaScript</option>
-                    <option value="Python">Python</option>
-                    <option value="Go">Go</option>
-                    <option value="Rust">Rust</option>
-                    <option value="Java">Java</option>
-                    <option value="C#">C#</option>
-                    <option value="C++">C++</option>
-                </select>
                 <button class="btn btn-primary" onclick="searchGitHub()">Search</button>
             </div>
+        </div>
+
+        <!-- Filters row — applies across all Top 5 tabs. Topic/User use HTML5
+             datalist so users can either pick from suggestions or type their
+             own value. Suggestion lists live below. -->
+        <div style="display: flex; gap: 12px; align-items: center; margin-top: 16px; flex-wrap: wrap; padding: 12px; background: #0f0f0f; border: 1px solid #222; border-radius: 8px;">
+            <span style="color: #888; font-size: 0.85rem;">Filters:</span>
+
+            <select id="discoverLanguage" onchange="loadExplore()" style="padding: 6px 10px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem;">
+                <option value="">Any language</option>
+                <option value="TypeScript">TypeScript</option>
+                <option value="JavaScript">JavaScript</option>
+                <option value="Python">Python</option>
+                <option value="Go">Go</option>
+                <option value="Rust">Rust</option>
+                <option value="Java">Java</option>
+                <option value="C#">C#</option>
+                <option value="C++">C++</option>
+            </select>
+
+            <input type="text" id="exploreTopic" list="topicChoices" placeholder="Topic (e.g. react, ai)"
+                   onchange="loadExplore()"
+                   style="padding: 6px 10px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem; width: 180px;">
+            <datalist id="topicChoices">
+                <option value="ai">
+                <option value="machine-learning">
+                <option value="llm">
+                <option value="agent">
+                <option value="claude">
+                <option value="mcp">
+                <option value="react">
+                <option value="nextjs">
+                <option value="vue">
+                <option value="svelte">
+                <option value="tailwindcss">
+                <option value="typescript">
+                <option value="javascript">
+                <option value="python">
+                <option value="rust">
+                <option value="go">
+                <option value="cli">
+                <option value="api">
+                <option value="web">
+                <option value="mobile">
+                <option value="docker">
+                <option value="kubernetes">
+                <option value="vscode">
+                <option value="devtools">
+                <option value="productivity">
+                <option value="self-hosted">
+                <option value="awesome">
+                <option value="cnc">
+                <option value="manufacturing">
+            </datalist>
+
+            <input type="text" id="exploreUser" list="userChoices" placeholder="User / org (e.g. vercel)"
+                   onchange="loadExplore()"
+                   style="padding: 6px 10px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem; width: 180px;">
+            <datalist id="userChoices">
+                <option value="vercel">
+                <option value="microsoft">
+                <option value="google">
+                <option value="openai">
+                <option value="anthropics">
+                <option value="meta">
+                <option value="facebook">
+                <option value="github">
+                <option value="cloudflare">
+                <option value="supabase">
+                <option value="firebase">
+                <option value="langchain-ai">
+                <option value="huggingface">
+                <option value="denoland">
+                <option value="oven-sh">
+                <option value="apple">
+                <option value="aws">
+                <option value="netflix">
+                <option value="spotify">
+                <option value="airbnb">
+                <option value="bfoster59">
+            </datalist>
+
+            <select id="exploreRange" onchange="loadExplore()" style="padding: 6px 10px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem;">
+                <option value="daily">Today</option>
+                <option value="weekly">This week</option>
+                <option value="monthly" selected>This month</option>
+                <option value="yearly">This year</option>
+            </select>
+
+            <button class="btn btn-secondary" onclick="clearExploreFilters()" style="font-size: 0.85rem;">Clear filters</button>
         </div>
 
         <!-- Pinned section (user-curated via localStorage) -->
@@ -198,17 +277,11 @@
             <div id="searchResults" class="project-grid"></div>
         </div>
 
-        <!-- Tabbed Top 5 — five categories, #1 styled larger. Time-range +
-             language filter (above) apply across all tabs. -->
-        <div class="section" style="margin-top: 32px;">
+        <!-- Tabbed Top 5 — five categories, #1 styled larger. All filters
+             above apply across every tab. -->
+        <div class="section" style="margin-top: 24px;">
             <div class="section-header" style="margin-bottom: 16px;">
                 <h3 style="font-size: 1.1rem;">Discover — Top 5 by category</h3>
-                <select id="exploreRange" onchange="loadExplore()" style="padding: 6px 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem;">
-                    <option value="daily">Today</option>
-                    <option value="weekly">This week</option>
-                    <option value="monthly" selected>This month</option>
-                    <option value="yearly">This year</option>
-                </select>
             </div>
             <div id="exploreTabs" style="display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 16px;"></div>
             <div id="exploreGrid" class="project-grid"></div>
