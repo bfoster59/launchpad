@@ -13,23 +13,15 @@ const db = new LaunchpadDB();
 // hanging — GIT_TERMINAL_PROMPT=0 tells git "no interactive stdin available".
 process.env.GIT_TERMINAL_PROMPT = '0';
 
-// Configure a per-repo credential helper after a private clone so future
-// fetch/pull/push use the stored PAT without re-embedding it in origin.
-function installCredentialHelper(repoDir, pat) {
-    try {
-        const fs = require('fs');
-        const path = require('path');
-        const { execSync } = require('child_process');
-        const credPath = path.join(repoDir, '.git', 'credentials');
-        fs.writeFileSync(credPath, `https://x-access-token:${pat}@github.com\n`, { mode: 0o600 });
-        execSync(`git -C "${repoDir}" config credential.helper "store --file=.git/credentials"`, {
-            stdio: 'ignore',
-            env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
-        });
-    } catch (e) {
-        console.error('credential helper install failed:', e.message);
-    }
-}
+// Auth strategy: relies on `gh auth setup-git` having registered the GitHub
+// CLI as the credential helper for github.com URLs (one-time global config).
+// With that in place, plain `git clone/fetch/pull/push` use gh's stored OAuth
+// token silently — no PAT injection, no GCM "Select an account" prompts, no
+// per-repo .git/credentials files.
+//
+// To set it up: run `gh auth setup-git` once. Verify with
+// `git config --global --get credential.https://github.com.helper` —
+// should return `!'C:\Program Files\GitHub CLI\gh.exe' auth git-credential`.
 
 // GitHub client — loaded from settings table on boot, or env var fallback
 let octokit = null;
@@ -1131,35 +1123,20 @@ app.post('/api/projects/:id/clone', async (req, res) => {
             return res.status(409).json({ error: 'Already cloned', local_path: targetDir });
         }
         
-        // Clone the repo — use fs.mkdirSync for cross-platform dir creation;
-        // `mkdir -p` is Unix-only and Windows cmd tries to create a literal
-        // folder named '-p'.
+        // Clone via plain `git clone` — auth is handled by gh-as-credential-
+        // helper (configured globally via `gh auth setup-git`). No URL token
+        // injection, no per-repo credential files. fs.mkdirSync for the parent
+        // dir (Unix `mkdir -p` is not portable to Windows cmd).
         const repoDir = path.dirname(targetDir);
         fs.mkdirSync(repoDir, { recursive: true });
 
-        // If a PAT is stored, inject it into the clone URL so private repos
-        // work without a terminal prompt. We then rewrite origin to the clean
-        // URL so the token isn't persisted in .git/config.
-        const storedPat = db.getSetting('github_pat') || process.env.GITHUB_TOKEN;
-        let cloneUrl = project.repo_url;
-        const isGitHubHttps = /^https:\/\/github\.com\//i.test(project.repo_url);
-        if (storedPat && isGitHubHttps) {
-            cloneUrl = project.repo_url.replace(/^https:\/\//, `https://x-access-token:${storedPat}@`);
-        }
-
         try {
-            // -c credential.helper= disables all credential helpers (including
-            // Windows' GCM) for this one command, so the x-access-token we
-            // inject into the URL doesn't get persisted in Windows Credential
-            // Manager and create a duplicate identity ('x-access-token' vs
-            // 'bfoster59') that prompts on every future git operation.
-            await execPromise(`git -c credential.helper= clone "${cloneUrl}" "${targetDir}"`);
+            await execPromise(`git clone "${project.repo_url}" "${targetDir}"`);
         } catch (cloneErr) {
             const msg = (cloneErr.stderr || cloneErr.message || '').trim();
-            // Classify the common failure modes so the UI can show something useful
             if (/authentication failed|could not read username|terminal prompts disabled/i.test(msg)) {
                 return res.status(401).json({
-                    error: 'Authentication failed — set a GitHub PAT in Settings (needs repo scope) and retry',
+                    error: 'Authentication failed — run `gh auth login` and `gh auth setup-git` in a terminal, then retry',
                     details: msg
                 });
             }
@@ -1169,18 +1146,7 @@ app.post('/api/projects/:id/clone', async (req, res) => {
                     details: msg
                 });
             }
-            throw cloneErr; // re-throw for the outer catch to 500
-        }
-
-        // Strip any injected token from origin AND install a per-repo credential
-        // helper so future fetch/pull/push authenticate without re-embedding the
-        // token in the URL. The PAT lives only in <repo>/.git/credentials
-        // (not tracked).
-        if (cloneUrl !== project.repo_url) {
-            try {
-                await execPromise(`git -C "${targetDir}" remote set-url origin "${project.repo_url}"`);
-                installCredentialHelper(targetDir, storedPat);
-            } catch (e) { /* non-fatal: clone succeeded */ }
+            throw cloneErr;
         }
         
         // Update project with local path
