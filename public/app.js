@@ -5,7 +5,6 @@ let currentProject = null;
 let editingProjectId = null;
 let githubRepos = [];
 let searchResults = [];
-let trendingRepos = [];
 let currentView = 'dashboard';
 let previousView = 'dashboard';
 
@@ -50,7 +49,7 @@ function showView(viewName) {
 
     // Load data for view
     if (viewName === 'explore') {
-        loadTrending();
+        loadExplore();
     } else if (viewName === 'github') {
         loadNeoView();
     } else if (viewName === 'settings') {
@@ -1638,8 +1637,8 @@ function togglePin(fullName, repoJson) {
     }
     setPinned(map);
     renderPinned();
-    // Re-render trending/search so the pin button state updates
-    if (typeof trendingRepos !== 'undefined' && trendingRepos.length) renderTrending();
+    // Re-render explore + search so pin-button state updates everywhere
+    if (document.getElementById('exploreGrid')?.children.length) loadExplore();
     if (typeof searchResults !== 'undefined' && searchResults.length) renderSearchResults();
 }
 
@@ -1657,35 +1656,109 @@ function renderPinned() {
     list.innerHTML = pins.map(r => renderGitHubRepoCard(r)).join('');
 }
 
-// ========== TRENDING ==========
+// ========== EXPLORE — outward-facing GitHub Top 5 ==========
+//
+// Five categories, top 5 each. Server-side query lives in /api/github/explore.
+// Selected tab persists in localStorage so the user lands back where they left.
+// Time range and language filter apply across all tabs.
 
-async function loadTrending() {
-    const range = document.getElementById('trendingRange')?.value || 'monthly';
+const EXPLORE_CATEGORIES = [
+    { key: 'trending',  label: '🔥 Trending',     hint: 'Most stars in the selected time window' },
+    { key: 'popular',   label: '⭐ Most Popular', hint: 'All-time most starred (ignores time range)' },
+    { key: 'new',       label: '🚀 New & Rising', hint: 'Recently created and gaining stars' },
+    { key: 'discussed', label: '💬 Most Discussed', hint: 'Popular repos with recent activity' },
+    { key: 'forked',    label: '🔱 Most Forked',  hint: 'Most-forked repos in the time window' }
+];
+
+function getExploreTab() {
+    const stored = localStorage.getItem('launchpad.exploreTab');
+    return EXPLORE_CATEGORIES.some(c => c.key === stored) ? stored : 'trending';
+}
+
+function setExploreTab(key) {
+    localStorage.setItem('launchpad.exploreTab', key);
+    loadExplore();
+}
+
+async function loadExplore() {
+    const range = document.getElementById('exploreRange')?.value || 'monthly';
     const lang = document.getElementById('discoverLanguage')?.value || '';
-    const params = new URLSearchParams({ since: range });
+    const activeKey = getExploreTab();
+
+    // Render tab bar (always — even while results load)
+    const tabsEl = document.getElementById('exploreTabs');
+    if (tabsEl) {
+        tabsEl.innerHTML = EXPLORE_CATEGORIES.map(c =>
+            `<button class="import-tab${c.key === activeKey ? ' active' : ''}" title="${escapeHtml(c.hint)}" onclick="setExploreTab('${c.key}')">${c.label}</button>`
+        ).join('');
+    }
+
+    const grid = document.getElementById('exploreGrid');
+    if (!grid) return;
+    grid.innerHTML = '<div class="loading">Loading…</div>';
+
+    const params = new URLSearchParams({ category: activeKey, since: range });
     if (lang) params.set('language', lang);
+
     try {
-        const response = await fetch(`/api/github/trending?${params.toString()}`);
+        const response = await fetch(`/api/github/explore?${params.toString()}`);
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error || 'Failed to load trending');
-        trendingRepos = data.items || [];
-        renderTrending();
+        if (!response.ok) throw new Error(data.error || 'Failed to load category');
+        const repos = data.items || [];
+        if (repos.length === 0) {
+            grid.innerHTML = '<div class="empty-state" style="grid-column: 1 / -1;">No repos match this category — try a different time range or language filter.</div>';
+            renderPinned();
+            return;
+        }
+        // Render with #1 styled larger (matches GitHub tab Top 5 pattern)
+        grid.innerHTML = repos.map((repo, i) => renderExploreRepoCard(repo, i)).join('');
         renderPinned();
     } catch (error) {
-        console.error('Error loading trending:', error);
-        const container = document.getElementById('trendingList');
-        if (container) container.innerHTML = `<div class="empty-state">Couldn't load trending: ${error.message}</div>`;
+        console.error('Error loading explore:', error);
+        grid.innerHTML = `<div class="empty-state" style="grid-column: 1 / -1;">Couldn't load: ${escapeHtml(error.message)}</div>`;
     }
 }
 
-function renderTrending() {
-    const container = document.getElementById('trendingList');
-    if (!container) return;
-    if (!trendingRepos || trendingRepos.length === 0) {
-        container.innerHTML = '<div class="empty-state">No trending repos — try a different range.</div>';
-        return;
-    }
-    container.innerHTML = trendingRepos.map(repo => renderGitHubRepoCard(repo)).join('');
+// Same data as renderGitHubRepoCard but with #1 styling for the leader.
+function renderExploreRepoCard(repo, rank) {
+    const isFirst = rank === 0;
+    const stars = (repo.stargazers_count || 0).toLocaleString();
+    const forks = (repo.forks_count || 0).toLocaleString();
+    const pinned = isPinned(repo.full_name);
+    const repoJson = encodeURIComponent(JSON.stringify({
+        full_name: repo.full_name,
+        description: repo.description,
+        html_url: repo.html_url,
+        language: repo.language,
+        stargazers_count: repo.stargazers_count || 0,
+        forks_count: repo.forks_count || 0
+    }));
+    const cardStyle = isFirst
+        ? 'border: 2px solid #60a5fa; background: linear-gradient(135deg, #1a2540, #1a1a1a); grid-column: span 2;'
+        : '';
+    const rankBadge = isFirst
+        ? '<span style="background: #60a5fa; color: #0b1220; font-weight: 700; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; margin-right: 8px;">#1</span>'
+        : `<span style="color: #666; font-weight: 600; margin-right: 8px;">#${rank + 1}</span>`;
+    return `
+        <div class="github-repo-card project-card" style="${cardStyle}">
+            <div class="repo-header" style="display: flex; justify-content: space-between; align-items: start; gap: 8px;">
+                <div class="repo-name" style="font-weight: 600; color: #93c5fd;">${rankBadge}${escapeHtml(repo.full_name)}</div>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                    <button class="btn btn-sm ${pinned ? 'btn-primary' : 'btn-secondary'}" onclick="togglePin('${repo.full_name}', '${repoJson}'); event.stopPropagation();" title="${pinned ? 'Unpin' : 'Pin to top'}">${pinned ? '📌 Pinned' : '📌 Pin'}</button>
+                    <div class="repo-stars" style="color: #888; font-size: 0.9rem;">⭐ ${stars}</div>
+                </div>
+            </div>
+            <div class="repo-description" style="margin: 8px 0; color: #ccc;">${escapeHtml(repo.description || 'No description')}</div>
+            <div class="repo-meta" style="color: #888; font-size: 0.85rem; display: flex; gap: 12px;">
+                ${repo.language ? `<span>🔧 ${escapeHtml(repo.language)}</span>` : ''}
+                <span>🍴 ${forks} forks</span>
+            </div>
+            <div class="repo-actions" style="margin-top: 12px; display: flex; gap: 8px;">
+                <button class="btn btn-sm" onclick="importGitHubRepo('${repo.html_url}')">📥 Import</button>
+                <a href="${repo.html_url}" target="_blank" class="btn btn-sm btn-secondary">View on GitHub</a>
+            </div>
+        </div>
+    `;
 }
 
 function renderGitHubRepoCard(repo) {

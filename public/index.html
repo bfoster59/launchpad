@@ -170,7 +170,7 @@
                 <input type="text" id="searchInput" placeholder="Search GitHub (e.g. nextjs starter)"
                        style="padding: 8px 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; width: 280px;"
                        onkeypress="if(event.key==='Enter') searchGitHub()">
-                <select id="discoverLanguage" style="padding: 8px 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">
+                <select id="discoverLanguage" onchange="loadExplore()" style="padding: 8px 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0;">
                     <option value="">Any language</option>
                     <option value="TypeScript">TypeScript</option>
                     <option value="JavaScript">JavaScript</option>
@@ -198,18 +198,20 @@
             <div id="searchResults" class="project-grid"></div>
         </div>
 
-        <!-- Trending — top 10 for the selected range -->
+        <!-- Tabbed Top 5 — five categories, #1 styled larger. Time-range +
+             language filter (above) apply across all tabs. -->
         <div class="section" style="margin-top: 32px;">
             <div class="section-header" style="margin-bottom: 16px;">
-                <h3 style="font-size: 1.1rem;">🔥 Trending</h3>
-                <select id="trendingRange" onchange="loadTrending()" style="padding: 6px 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem;">
+                <h3 style="font-size: 1.1rem;">Discover — Top 5 by category</h3>
+                <select id="exploreRange" onchange="loadExplore()" style="padding: 6px 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem;">
                     <option value="daily">Today</option>
                     <option value="weekly">This week</option>
                     <option value="monthly" selected>This month</option>
                     <option value="yearly">This year</option>
                 </select>
             </div>
-            <div id="trendingList" class="project-grid"></div>
+            <div id="exploreTabs" style="display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 16px;"></div>
+            <div id="exploreGrid" class="project-grid"></div>
         </div>
     </div>
 

@@ -252,10 +252,21 @@ app.get('/api/github/search', async (req, res) => {
     }
 });
 
-// Get trending repos
-app.get('/api/github/trending', async (req, res) => {
+// ========== EXPLORE — outward-facing GitHub discovery ==========
+//
+// One endpoint, five categories. Each category builds an appropriate GitHub
+// search query + sort key. `since` controls the time window for tabs that
+// filter by date; the all-time tab (popular) ignores it. `language` filter
+// applies across all tabs.
+//
+// Note: GitHub's search API doesn't expose downloads (those live on
+// npm/PyPI/crates.io). "Most Discussed" approximates engagement via the
+// `updated` sort with a stars floor — repos that are both popular AND being
+// actively touched bubble up. "help-wanted-issues" sort exists but biases
+// toward unfinished projects, which isn't what we want here.
+app.get('/api/github/explore', async (req, res) => {
     try {
-        const { language = '', since = 'monthly' } = req.query;
+        const { language = '', since = 'monthly', category = 'trending' } = req.query;
 
         const now = new Date();
         const ranges = {
@@ -264,19 +275,28 @@ app.get('/api/github/trending', async (req, res) => {
             monthly: 30 * 24 * 60 * 60 * 1000,
             yearly: 365 * 24 * 60 * 60 * 1000
         };
-        const dateFilter = new Date(now - (ranges[since] || ranges.monthly));
-        const dateStr = dateFilter.toISOString().split('T')[0];
+        const ms = ranges[since] || ranges.monthly;
+        const sinceDate = new Date(now - ms).toISOString().split('T')[0];
+        const langQ = language ? ` language:${language}` : '';
 
-        let query = `created:>${dateStr}`;
-        if (language) query += ` language:${language}`;
+        // Each category: { q, sort, order } passed straight to search.repos.
+        const categories = {
+            trending:  { q: `created:>${sinceDate} stars:>10${langQ}`,    sort: 'stars',   order: 'desc' },
+            popular:   { q: `stars:>1000${langQ}`,                         sort: 'stars',   order: 'desc' },
+            new:       { q: `created:>${sinceDate} stars:>5${langQ}`,      sort: 'stars',   order: 'desc' },
+            discussed: { q: `pushed:>${sinceDate} stars:>500${langQ}`,     sort: 'updated', order: 'desc' },
+            forked:    { q: `created:>${sinceDate} forks:>50${langQ}`,     sort: 'forks',   order: 'desc' }
+        };
 
-        // Use authenticated client when available — 5000/hr vs 60/hr unauthed
+        const cat = categories[category];
+        if (!cat) return res.status(400).json({ error: `Unknown category: ${category}` });
+
         const client = octokit || new Octokit();
         const { data } = await client.search.repos({
-            q: query,
-            sort: 'stars',
-            order: 'desc',
-            per_page: 10
+            q: cat.q,
+            sort: cat.sort,
+            order: cat.order,
+            per_page: 5
         });
 
         res.json(data);
@@ -284,6 +304,7 @@ app.get('/api/github/trending', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+
 
 // Run a sync check for a single project. Returns the same shape the GET
 // /sync-status endpoint returns. Extracted so the boot-time sweep + the
