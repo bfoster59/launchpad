@@ -1041,14 +1041,29 @@ async function launchProject() {
             return;
         }
 
+        // Server now waits ~2.5s after spawn and returns 500 + output if the
+        // child died early (port conflict, missing script, etc). Show that
+        // output verbatim so the user can diagnose without digging through logs.
+        if (data.type === 'failed') {
+            alert(`❌ ${data.error}\n\nDev server output:\n\n${data.output || '(no output captured)'}\n\nIn: ${data.cwd}`);
+            return;
+        }
         if (!res.ok) throw new Error(data.error || 'Launch failed');
 
         if (data.type === 'url') {
             window.open(data.url, '_blank');
             showToast(`Opened ${data.url}`);
         } else if (data.type === 'spawned') {
-            showToast(`${data.command} started (pid ${data.pid}) — waiting for URL…`);
-            if (data.live_url) window.open(data.live_url, '_blank');
+            // The launch endpoint may have detected the URL during its 2.5s
+            // wait — if so, open it immediately instead of relying on polling.
+            if (data.url) {
+                showToast(`✅ Running at ${data.url}`);
+                window.open(data.url, '_blank');
+                _lastDetectedUrl = data.url;
+            } else {
+                showToast(`${data.command} started (pid ${data.pid}) — waiting for URL…`);
+                if (data.live_url) window.open(data.live_url, '_blank');
+            }
             // Kick off poll so the URL chip + Stop button appear immediately,
             // and auto-opens the browser once the dev server prints its URL.
             startRunningPoll();

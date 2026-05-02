@@ -809,6 +809,24 @@ app.post('/api/projects/:id/launch', async (req, res) => {
             if (!scriptName) {
                 return res.status(400).json({ error: 'package.json has no dev or start script' });
             }
+            // Parse the port from the npm script itself as a fallback for when
+            // stdout capture comes up empty (Next.js suppresses pretty output
+            // when stdout isn't a TTY, leaving us with no URL to extract).
+            // Looks for `-p NNNN`, `--port NNNN`, `-p=NNNN`, `--port=NNNN`,
+            // or env-style `PORT=NNNN`. First match wins.
+            const scriptStr = String(scripts[scriptName] || '');
+            const portFromScript = (() => {
+                const patterns = [
+                    /(?:^|\s)-p\s+(\d{2,5})/,
+                    /(?:^|\s)--port[=\s]+(\d{2,5})/,
+                    /(?:^|\s)PORT=(\d{2,5})/
+                ];
+                for (const re of patterns) {
+                    const m = re.exec(scriptStr);
+                    if (m) return parseInt(m[1]);
+                }
+                return null;
+            })();
             // Catch the common case: deps not installed. A detached spawn
             // would silently fail otherwise — the user clicks Launch, gets
             // a PID, but Next.js never boots.
@@ -848,7 +866,11 @@ app.post('/api/projects/:id/launch', async (req, res) => {
                 pid: child.pid,
                 command: `npm run ${scriptName}`,
                 cwd,
-                url: null,
+                // Pre-fill URL from the parsed port. stdout capture (if it
+                // ever produces output) will overwrite this with whatever the
+                // dev server actually prints — but having a working fallback
+                // means the UI can show a clickable link immediately.
+                url: portFromScript ? `http://localhost:${portFromScript}` : null,
                 startedAt: Date.now(),
                 stdoutTail: '',
                 child
@@ -866,17 +888,57 @@ app.post('/api/projects/:id/launch', async (req, res) => {
             };
             if (child.stdout) child.stdout.on('data', readChunk);
             if (child.stderr) child.stderr.on('data', readChunk);
+
+            // Track whether the child died early so we can return a useful
+            // error to the caller instead of an empty {running:false}. We hold
+            // the captured stdout/stderr in entry.lastError so the UI can
+            // surface it (e.g., EADDRINUSE from a zombie dev server).
+            let earlyExit = null;
             child.on('exit', (code) => {
                 const e = runningServers.get(project.id);
-                if (e && e.pid === child.pid) runningServers.delete(project.id);
+                if (e && e.pid === child.pid) {
+                    e.exitedAt = Date.now();
+                    e.exitCode = code;
+                    e.lastError = (e.stdoutTail || '').slice(-2000);
+                    // Keep the entry around for 60s so the UI poll can read
+                    // the failure detail. After that, GC it.
+                    setTimeout(() => {
+                        const cur = runningServers.get(project.id);
+                        if (cur && cur.exitedAt === e.exitedAt) runningServers.delete(project.id);
+                    }, 60000);
+                }
+                earlyExit = { code, output: (entry.stdoutTail || '').slice(-2000) };
             });
             child.on('error', (err) => console.error('spawn error:', err.message));
+
+            // Wait briefly to catch fast-failing spawns (port conflicts,
+            // missing scripts, syntax errors). 2.5s is enough for Next.js /
+            // Vite to either bind the port and start logging, or crash.
+            await new Promise(r => setTimeout(r, 2500));
+
+            if (earlyExit) {
+                // Strip ANSI escape sequences so the error reads cleanly in the UI.
+                const cleanOut = earlyExit.output.replace(/\x1b\[[0-9;]*m/g, '').trim();
+                db.addUpdate({
+                    project_id: project.id,
+                    type: 'progress',
+                    title: 'Launch failed',
+                    content: `npm run ${scriptName} exited (code ${earlyExit.code}) in ${cwd}\n\n${cleanOut}`
+                });
+                return res.status(500).json({
+                    type: 'failed',
+                    error: `Dev server exited within 2.5s (exit code ${earlyExit.code}) — see output below`,
+                    output: cleanOut,
+                    cwd
+                });
+            }
 
             db.addUpdate({
                 project_id: project.id,
                 type: 'progress',
                 title: 'Launched',
-                content: `Spawned: npm run ${scriptName} (pid ${child.pid}) in ${cwd}`
+                content: `Spawned: npm run ${scriptName} (pid ${child.pid}) in ${cwd}` +
+                         (entry.url ? ` — ${entry.url}` : '')
             });
 
             return res.json({
@@ -884,8 +946,9 @@ app.post('/api/projects/:id/launch', async (req, res) => {
                 pid: child.pid,
                 command: `npm run ${scriptName}`,
                 cwd,
+                url: entry.url || null,         // Often already detected during the 2.5s wait
                 live_url: project.live_url || null,
-                note: 'Dev server running. URL will appear once detected.'
+                note: entry.url ? `Running on ${entry.url}` : 'Dev server running. URL will appear once detected.'
             });
         }
 
