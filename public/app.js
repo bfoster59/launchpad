@@ -678,6 +678,16 @@ async function showProject(id) {
                     </div>
                 </div>
             ` : ''}
+            <!-- Running URL — populated by refreshRunningState() while a dev
+                 server is alive. Hidden by default; shown when the launch poll
+                 detects a localhost URL in the dev server's stdout. -->
+            <div class="info-row" id="runningUrlRow" style="display: none;">
+                <div class="info-label">Running on</div>
+                <div class="info-value" style="font-family: monospace; font-size: 0.85rem;">
+                    <a id="runningUrlLink" href="#" target="_blank" style="color: #22c55e;">—</a>
+                    <span id="runningUrlPid" style="color: #666; margin-left: 8px;"></span>
+                </div>
+            </div>
             ${currentProject.stack ? `
                 <div class="info-row">
                     <div class="info-label">Stack</div>
@@ -900,13 +910,31 @@ async function refreshRunningState() {
         const launchBtn = document.getElementById('launchBtn');
         const stopBtn = document.getElementById('stopBtn');
         const urlChip = document.getElementById('detectedUrl');
+        const browserBtn = document.getElementById('openInBrowserBtn');
+        const urlRow = document.getElementById('runningUrlRow');
+        const urlLink = document.getElementById('runningUrlLink');
+        const urlPid = document.getElementById('runningUrlPid');
 
         if (data.running) {
             if (launchBtn) launchBtn.style.display = 'none';
             if (stopBtn) stopBtn.style.display = 'inline-block';
             if (data.url) {
+                // Action-row pill (primary surface — impossible to miss)
+                if (browserBtn) {
+                    browserBtn.style.display = 'inline-block';
+                    browserBtn.dataset.url = data.url;
+                    browserBtn.title = `Open ${data.url}`;
+                }
+                // Info-panel row (secondary surface — for reference / re-open)
+                if (urlRow) urlRow.style.display = '';
+                if (urlLink) {
+                    urlLink.href = data.url;
+                    urlLink.textContent = data.url;
+                }
+                if (urlPid) urlPid.textContent = `pid ${data.pid}`;
+                // Tiny chip — kept for backward compatibility, less prominent
                 if (urlChip) {
-                    urlChip.innerHTML = `🟢 Running: <a href="${data.url}" target="_blank" style="color: #93c5fd;">${data.url}</a> (pid ${data.pid})`;
+                    urlChip.innerHTML = `🟢 <a href="${data.url}" target="_blank" style="color: #93c5fd;">${data.url}</a>`;
                     urlChip.style.display = 'inline';
                 }
                 // Auto-open browser the first time we learn the URL for this session
@@ -915,6 +943,8 @@ async function refreshRunningState() {
                     window.open(data.url, '_blank');
                 }
             } else {
+                if (browserBtn) browserBtn.style.display = 'none';
+                if (urlRow) urlRow.style.display = 'none';
                 if (urlChip) {
                     urlChip.textContent = `⏳ Running (pid ${data.pid}) — waiting for URL…`;
                     urlChip.style.display = 'inline';
@@ -925,10 +955,20 @@ async function refreshRunningState() {
             const canLaunch = currentProject && (currentProject.local_path || currentProject.live_url);
             if (launchBtn) launchBtn.style.display = canLaunch ? 'inline-block' : 'none';
             if (stopBtn) stopBtn.style.display = 'none';
+            if (browserBtn) browserBtn.style.display = 'none';
+            if (urlRow) urlRow.style.display = 'none';
             if (urlChip) urlChip.style.display = 'none';
             _lastDetectedUrl = null;
         }
     } catch (e) { /* non-fatal */ }
+}
+
+// Click handler for the 🌐 Open in Browser pill — opens the running URL.
+// dataset.url is set by refreshRunningState whenever a URL is detected.
+function openInBrowser() {
+    const btn = document.getElementById('openInBrowserBtn');
+    const url = btn?.dataset?.url;
+    if (url) window.open(url, '_blank');
 }
 
 function startRunningPoll() {

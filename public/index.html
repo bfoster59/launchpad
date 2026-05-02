@@ -598,6 +598,10 @@
                     <button class="btn btn-secondary" onclick="editProject()">Edit</button>
                     <button id="launchBtn" class="btn btn-primary" onclick="launchProject()" style="display: none;">🚀 Launch</button>
                     <button id="stopBtn" class="btn btn-secondary" onclick="stopDevServer()" style="display: none; color: #ef4444;" title="Kill the running dev server">🛑 Stop Dev Server</button>
+                    <!-- Promoted from a tiny inline chip to a real action pill so the
+                         live URL is impossible to miss after Launch. Only visible
+                         while a dev server is running with a detected URL. -->
+                    <button id="openInBrowserBtn" class="btn btn-primary" onclick="openInBrowser()" style="display: none; background: #10b981;" title="Open the running dev server in your browser">🌐 Open in Browser</button>
                     <span id="detectedUrl" style="display: none; margin-left: 12px; color: #93c5fd; font-size: 0.9rem;"></span>
                     <button id="cloneBtn" class="btn btn-primary" onclick="cloneProject()" style="display: none;">📥 Clone to Local</button>
                     <button id="syncBtn" class="btn btn-primary" onclick="checkSyncStatus()" style="display: none;">🔄 Check Sync Status</button>
