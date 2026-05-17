@@ -1084,6 +1084,21 @@ function showCommitDialog(needsCommit) {
     openCommitModal({ addAll: !!needsCommit, push: true });
 }
 
+// Open the commit modal for an arbitrary project (not the one currently in
+// detail view). Used by the inline 💾 Commit button on DIRTY rows in the Browse
+// GitHub modal. Loads the full project record into `currentProject` so the
+// existing commit flow (preview / submit / sync refresh) works unchanged.
+async function quickCommitProject(projectId) {
+    try {
+        const res = await fetch(`/api/projects/${projectId}`);
+        if (!res.ok) throw new Error('Failed to load project');
+        currentProject = await res.json();
+        openCommitModal({ addAll: true, push: true });
+    } catch (e) {
+        alert(`Couldn't open commit dialog: ${e.message}`);
+    }
+}
+
 function openCommitModal(opts) {
     if (!currentProject) return;
     const options = opts || {};
@@ -1161,6 +1176,18 @@ async function loadCommitPreview() {
             ${fileRows}
         `;
 
+        // Suggest a commit message if the textarea is still empty. The user
+        // can edit or replace it freely — this is a starting point, not a fait
+        // accompli. Built from the file list so the message reflects the diff.
+        const msgEl = document.getElementById('commitMessage');
+        if (msgEl && !msgEl.value.trim()) {
+            const suggested = suggestCommitMessage(data.files);
+            if (suggested) {
+                msgEl.value = suggested;
+                msgEl.select(); // pre-select so the user can overwrite in one keystroke
+            }
+        }
+
         // Gate the submit button: warnings require explicit override.
         const overrideWrap = document.getElementById('commitOverrideWrap');
         const override = document.getElementById('commitOverride');
@@ -1184,6 +1211,48 @@ function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, c => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
     })[c]);
+}
+
+// Build a starter commit message from the changed-files list. The user is
+// expected to edit this — the goal is to save typing, not to be authoritative.
+// Conventional-commit-ish prefixes are applied when the change matches a
+// known pattern (deps, docs, tests, config). Falls back to a verb + file list.
+function suggestCommitMessage(files) {
+    if (!Array.isArray(files) || files.length === 0) return '';
+
+    // Tally status counts to pick a dominant verb.
+    const statusCounts = {};
+    files.forEach(f => { statusCounts[f.status] = (statusCounts[f.status] || 0) + 1; });
+    const dominantStatus = Object.entries(statusCounts).sort((a, b) => b[1] - a[1])[0][0];
+    const verb = ({ added: 'Add', modified: 'Update', deleted: 'Remove', renamed: 'Rename' })[dominantStatus] || 'Update';
+
+    const paths = files.map(f => f.path);
+    const basenames = paths.map(p => p.split('/').pop());
+    const isDep = p => /(^|\/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|requirements.*\.txt|Pipfile(\.lock)?|poetry\.lock|Cargo\.lock|go\.sum|composer\.lock)$/i.test(p);
+    const isDoc = p => /\.(md|mdx|txt|rst)$/i.test(p) || /^docs?\//i.test(p);
+    const isTest = p => /(^|\/)(__tests__|tests?|spec)\//i.test(p) || /\.(test|spec)\.(js|ts|jsx|tsx|py)$/i.test(p);
+    const isConfig = p => /\.(ya?ml|toml|ini|cfg|conf)$/i.test(p) || /^\.[\w-]+(rc|ignore|env)$/i.test(p.split('/').pop());
+
+    // Single-category shortcuts.
+    if (paths.every(isDep))    return `chore: update dependencies`;
+    if (paths.every(isDoc))    return paths.length === 1 ? `docs: update ${basenames[0]}` : `docs: update ${paths.length} files`;
+    if (paths.every(isTest))   return paths.length === 1 ? `test: update ${basenames[0]}` : `test: update ${paths.length} files`;
+    if (paths.every(isConfig)) return paths.length === 1 ? `chore: update ${basenames[0]}` : `chore: update config (${paths.length} files)`;
+
+    // Single file → "Verb path/to/file" (keep relative path for context).
+    if (paths.length === 1) return `${verb} ${paths[0]}`;
+
+    // All in the same directory → "Verb N files in <dir>"
+    const dirs = new Set(paths.map(p => p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''));
+    if (dirs.size === 1) {
+        const dir = [...dirs][0];
+        return dir ? `${verb} ${paths.length} files in ${dir}` : `${verb} ${paths.length} files`;
+    }
+
+    // Mixed — verb + top 3 basenames.
+    const sample = basenames.slice(0, 3).join(', ');
+    const tail = paths.length > 3 ? ` (+${paths.length - 3} more)` : '';
+    return `${verb} ${sample}${tail}`;
 }
 
 function closeCommitModal() {
@@ -1233,32 +1302,43 @@ async function submitCommit() {
         if (!res.ok) throw new Error(data.error || 'Commit failed');
 
         const parts = [];
+        let anyFailure = false;
         if (data.results.commit) {
             if (data.results.commit.ok) parts.push('✅ Committed');
             else if (data.results.commit.skipped) parts.push('⏭ Nothing to commit');
-            else parts.push(`❌ Commit failed:\n${data.results.commit.error}`);
+            else { parts.push(`❌ Commit failed:\n${data.results.commit.error}`); anyFailure = true; }
         }
         if (data.results.push) {
             if (data.results.push.ok) parts.push('✅ Pushed to origin\n' + (data.results.push.output || ''));
-            else parts.push(`❌ Push failed:\n${data.results.push.error}`);
+            else { parts.push(`❌ Push failed:\n${data.results.push.error}`); anyFailure = true; }
         }
         resultEl.textContent = parts.join('\n\n') || 'Done.';
+        // Red border + scroll into view on failure so the message can't be missed.
+        resultEl.style.borderLeft = anyFailure ? '4px solid #ef4444' : '4px solid #10b981';
+        resultEl.style.padding = '10px 12px';
+        resultEl.style.background = '#0f0f0f';
+        resultEl.style.whiteSpace = 'pre-wrap';
+        resultEl.scrollIntoView({ block: 'nearest' });
 
-        // If at least one step succeeded, refresh sync + schedule auto-close
-        const anySuccess = (data.results.commit && data.results.commit.ok) ||
-                           (data.results.push && data.results.push.ok) ||
-                           (data.results.commit && data.results.commit.skipped);
-        if (anySuccess) {
+        // Only auto-close when every requested step succeeded (commit-skipped counts
+        // as success). Any failure → leave modal open so the user can see the error.
+        const allSucceeded = !anyFailure;
+        if (allSucceeded) {
             setTimeout(() => {
                 closeCommitModal();
-                // If the sync panel is visible, refresh it
                 if (document.getElementById('syncStatus') && document.getElementById('syncStatus').style.display !== 'none') {
                     checkSyncStatus();
                 }
+                // Refresh local-clone detect so the import modal's tags update.
+                if (typeof refreshLocalCloneStatus === 'function') refreshLocalCloneStatus();
             }, 1500);
         }
     } catch (e) {
         resultEl.textContent = `❌ ${e.message}`;
+        resultEl.style.borderLeft = '4px solid #ef4444';
+        resultEl.style.padding = '10px 12px';
+        resultEl.style.background = '#0f0f0f';
+        resultEl.style.whiteSpace = 'pre-wrap';
     } finally {
         submitBtn.disabled = false;
         submitBtn.textContent = 'Commit';
@@ -1427,21 +1507,54 @@ async function checkSyncStatus() {
 
 // ========== BULK IMPORT ==========
 
+// Cache of user's repos (fetched once per modal-open via loadBrowseRepos).
+// Shared between Browse and Bulk tabs so Bulk doesn't re-hit the API.
+let browseReposCache = null;
+// Map of project_id → { status: 'cloned'|'dirty'|'not_cloned', path, dirty }
+// Refreshed when the import modal opens — fast filesystem-only scan.
+let localCloneStatus = {};
+let importSearchDebounce = null;
+
 async function showBulkImport() {
     document.getElementById('bulkImportModal').style.display = 'block';
-    showImportTab('url'); // Default to URL tab
-    // If a PAT is stored in Settings, prefill the field so users don't re-paste.
+    // Default to Browse GitHub — the user's own repos, one click to import.
+    showImportTab('browse');
+
+    // Prefill the bulk-tab PAT input from Settings so the user doesn't paste twice.
     try {
         const s = await (await fetch('/api/settings')).json();
         const input = document.getElementById('githubToken');
         if (s.github_pat && s.github_pat.set && !input.value) {
-            // Server hides the real token (only returns a 7-char preview). Mark the
-            // field so loadGitHubRepos knows to use the stored PAT rather than
-            // whatever's in the field.
             input.value = '__USE_STORED__';
             input.placeholder = `Using stored token (${s.github_pat.preview}) — edit to override`;
             input.dataset.usesStored = 'true';
         }
+    } catch (e) { /* non-fatal */ }
+
+    // Kick off the local-clone scan in parallel — fast, no network. It updates
+    // `localCloneStatus` and re-renders the Browse list when done.
+    refreshLocalCloneStatus();
+
+    // Auto-load Browse tab. Will error out cleanly if no PAT — message shown inline.
+    loadBrowseRepos(false);
+}
+
+// Refresh local clone detection (fast filesystem scan + cheap git status).
+// Auto-backfills local_path for any clones found at the canonical path.
+async function refreshLocalCloneStatus() {
+    try {
+        const res = await fetch('/api/local-clone-detect');
+        const data = await res.json();
+        if (!res.ok) return;
+        localCloneStatus = data.results || {};
+        // Re-render whatever import tab is open so tags reflect the new info.
+        if (browseReposCache) renderBrowseFromCache();
+        if (typeof renderGitHubReposList === 'function' && document.getElementById('repoList')?.style.display !== 'none') {
+            renderGitHubReposList();
+        }
+        // The server may have backfilled local_path — refresh the projects array.
+        await loadProjects();
+        if (browseReposCache) renderBrowseFromCache();
     } catch (e) { /* non-fatal */ }
 }
 
@@ -1450,17 +1563,272 @@ function hideBulkImport() {
     document.getElementById('importUrl').value = '';
     document.getElementById('githubToken').value = '';
     document.getElementById('repoList').style.display = 'none';
-    showImportTab('url');
+    const searchInput = document.getElementById('importSearchQuery');
+    if (searchInput) searchInput.value = '';
+    const results = document.getElementById('importSearchResults');
+    if (results) { results.style.display = 'none'; results.innerHTML = ''; }
+    showImportTab('browse');
 }
 
 function showImportTab(tab) {
-    // Update tab buttons
+    // Tab buttons
+    document.getElementById('importBrowseTab').classList.toggle('active', tab === 'browse');
     document.getElementById('importUrlTab').classList.toggle('active', tab === 'url');
     document.getElementById('importBulkTab').classList.toggle('active', tab === 'bulk');
-    
-    // Update tab sections
+
+    // Tab sections
+    document.getElementById('importBrowseSection').style.display = tab === 'browse' ? 'block' : 'none';
     document.getElementById('importUrlSection').style.display = tab === 'url' ? 'block' : 'none';
     document.getElementById('importBulkSection').style.display = tab === 'bulk' ? 'block' : 'none';
+}
+
+// ---------- Browse GitHub tab ----------
+
+async function loadBrowseRepos(forceRefresh = false) {
+    const container = document.getElementById('browseRepoList');
+    const userLabel = document.getElementById('browseUserLabel');
+
+    if (browseReposCache && !forceRefresh) {
+        renderBrowseRepos(browseReposCache.user, browseReposCache.repos);
+        return;
+    }
+
+    container.innerHTML = '<div class="loading">Loading your repositories…</div>';
+    userLabel.textContent = '';
+
+    try {
+        const res = await fetch('/api/github/repos');
+        const data = await res.json();
+        if (!res.ok) {
+            const msg = data.error || 'Failed to load repositories';
+            // No PAT yet — point the user at the Bulk tab where they can paste one.
+            if (res.status === 401) {
+                container.innerHTML = `
+                    <div class="empty-state" style="padding: 24px; text-align: center;">
+                        <div style="margin-bottom: 12px;">No GitHub token configured.</div>
+                        <button class="btn btn-secondary" onclick="showImportTab('bulk')">Add token in Bulk Import tab</button>
+                    </div>`;
+                return;
+            }
+            throw new Error(msg);
+        }
+        browseReposCache = data;
+        renderBrowseRepos(data.user, data.repos);
+    } catch (err) {
+        container.innerHTML = `<div class="empty-state" style="color: #ef4444;">Error: ${err.message}</div>`;
+    }
+}
+
+// Build the chip list for one row. May return 1+ chips. Rules:
+//   - not in DB                       → [NEW]
+//   - DIRTY / AHEAD / BEHIND each stand alone or stack (all true facts)
+//   - SYNCED only shown when all three are confirmed false (full sync ran, clean)
+//   - CLONED is a fallback: cloned locally but no sync info, not dirty
+//   - NOT CLONED is the floor: in DB, no local clone detected anywhere
+//
+// `project` is the DB row (or null). `detect` is the local filesystem detect
+// for this project, or null if the scan hasn't run yet.
+const TAG_STYLES = {
+    NEW:        { bg: '#22c55e', fg: '#052e16' },
+    DIRTY:      { bg: '#ef4444', fg: '#3a0a0a' },
+    AHEAD:      { bg: '#f59e0b', fg: '#3a2200' },
+    BEHIND:     { bg: '#3b82f6', fg: '#0a1f3a' },
+    SYNCED:     { bg: '#10b981', fg: '#053024' },
+    CLONED:     { bg: '#14b8a6', fg: '#042f2e' },
+    'NOT CLONED': { bg: '#6b7280', fg: '#0f0f0f' },
+    ERROR:      { bg: '#ef4444', fg: '#3a0a0a' }
+};
+function chip(label) {
+    const s = TAG_STYLES[label] || TAG_STYLES['NOT CLONED'];
+    return { label, bg: s.bg, fg: s.fg };
+}
+
+function getBrowseTags(project, detect) {
+    if (!project) return [chip('NEW')];
+
+    const dirty = !!(detect && detect.dirty);
+    const cloned = !!(detect && (detect.status === 'cloned' || detect.status === 'dirty'));
+    const s = project.sync_status;
+
+    const chips = [];
+    if (dirty || s === 'dirty') chips.push(chip('DIRTY'));
+    if (s === 'behind') chips.push(chip('BEHIND'));
+    if (s === 'unpushed' || s === 'ahead') chips.push(chip('AHEAD'));
+
+    if (chips.length > 0) return chips; // DIRTY/AHEAD/BEHIND all imply cloned — no need to add CLONED.
+    if (s === 'synced') return [chip('SYNCED')];
+    if (cloned) return [chip('CLONED')];
+    if (s === 'error') return [chip('ERROR')];
+    return [chip('NOT CLONED')];
+}
+
+// Re-render Browse list from cache (used by filter inputs — no API call).
+function renderBrowseFromCache() {
+    if (!browseReposCache) return;
+    renderBrowseRepos(browseReposCache.user, browseReposCache.repos);
+}
+
+function renderBrowseRepos(user, repos) {
+    const container = document.getElementById('browseRepoList');
+    const userLabel = document.getElementById('browseUserLabel');
+
+    // Build URL → project map (case-insensitive, .git suffix stripped) so we can attach sync_status.
+    const projectByUrl = new Map();
+    const normalizeUrl = u => (u || '').toLowerCase().replace(/\.git$/, '').replace(/\/$/, '');
+    (projects || []).forEach(p => {
+        if (p.repo_url) projectByUrl.set(normalizeUrl(p.repo_url), p);
+    });
+
+    // Read filters (elements may not exist yet on first render — fall back to defaults).
+    const searchTerm = (document.getElementById('browseSearch')?.value || '').trim().toLowerCase();
+    const statusFilter = document.getElementById('browseStatusFilter')?.value || 'all';
+
+    const enriched = repos.map(repo => {
+        const proj = projectByUrl.get(normalizeUrl(repo.html_url));
+        return { repo, project: proj || null, isImported: !!proj };
+    });
+
+    // Counts for the header reflect the unfiltered totals.
+    const totalCount = enriched.length;
+    const newCount = enriched.filter(e => !e.isImported).length;
+
+    // Apply filters. `statusFilter` matches against the rendered chip labels
+    // so what the user picks lines up with what they see.
+    const filtered = enriched.filter(({ repo, project, isImported }) => {
+        if (searchTerm) {
+            const hay = `${repo.name} ${repo.description || ''}`.toLowerCase();
+            if (!hay.includes(searchTerm)) return false;
+        }
+        if (statusFilter === 'all') return true;
+        if (statusFilter === 'new') return !isImported;
+        if (statusFilter === 'imported') return isImported;
+        if (!isImported) return false;
+        const detect = localCloneStatus[project.id];
+        const labels = getBrowseTags(project, detect).map(c => c.label.toLowerCase().replace(' ', '_'));
+        return labels.includes(statusFilter);
+    });
+
+    // Within the filtered list, still surface NEW first.
+    const newOnes = filtered.filter(e => !e.isImported);
+    const existing = filtered.filter(e => e.isImported);
+    const ordered = [...newOnes, ...existing];
+
+    userLabel.innerHTML = user
+        ? `@${user} · ${totalCount} repos${newCount > 0 ? ` · <span style="color: #22c55e; font-weight: 600;">${newCount} new</span>` : ''}${filtered.length !== totalCount ? ` · <span style="color: #888;">${filtered.length} shown</span>` : ''}`
+        : '';
+
+    if (!repos.length) {
+        container.innerHTML = '<div class="empty-state">No repositories found on this account.</div>';
+        return;
+    }
+    if (!filtered.length) {
+        container.innerHTML = '<div class="empty-state">No repositories match the current filters.</div>';
+        return;
+    }
+
+    const separatorIdx = newOnes.length > 0 && existing.length > 0 ? newOnes.length : -1;
+
+    container.innerHTML = ordered.map(({ repo, project, isImported }, idx) => {
+        const detect = project ? localCloneStatus[project.id] : null;
+        const tags = getBrowseTags(project, detect);
+
+        const lastCommit = repo.daysSinceCommit !== null && repo.daysSinceCommit !== undefined
+            ? `${repo.daysSinceCommit}d ago` : '';
+        const cursor = isImported ? 'default' : 'pointer';
+        const bg = isImported ? '#0f0f0f' : '#152418';
+        const borderColor = isImported ? '#333' : '#22c55e';
+        // Inline Commit button on DIRTY rows — opens the existing commit modal
+        // for this project without navigating away from the import modal.
+        const isDirty = tags.some(t => t.label === 'DIRTY');
+        const commitBtn = isDirty
+            ? `<button class="btn btn-sm" style="background: #ef4444; color: #fff;" onclick="event.stopPropagation(); quickCommitProject(${project.id})" title="Commit + push uncommitted changes">💾 Commit</button>`
+            : '';
+        const openBtn = isImported
+            ? `<button class="btn btn-sm btn-secondary" onclick="event.stopPropagation(); showProject(${project.id})">Open</button>`
+            : `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); importGitHubRepo('${repo.html_url}')">📥 Import</button>`;
+        const action = `<div style="display: flex; gap: 6px;">${commitBtn}${openBtn}</div>`;
+        const onclickAttr = isImported
+            ? ` onclick="showProject(${project.id})"`
+            : ` onclick="importGitHubRepo('${repo.html_url}')"`;
+
+        const tagBadges = tags.map(t =>
+            `<span style="background: ${t.bg}; color: ${t.fg}; font-weight: 700; padding: 2px 8px; border-radius: 999px; font-size: 0.7rem; margin-right: 6px; letter-spacing: 0.5px;">${t.label}</span>`
+        ).join('');
+
+        const separator = idx === separatorIdx
+            ? '<div style="margin: 16px 0 10px; padding: 6px 0; color: #666; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 1px; border-top: 1px solid #222;">Already imported</div>'
+            : '';
+
+        return `${separator}
+            <div style="padding: 12px 14px; background: ${bg}; border: 1px solid ${borderColor}; border-radius: 8px; margin-bottom: 10px; cursor: ${cursor}; display: flex; justify-content: space-between; align-items: center; gap: 12px;"${onclickAttr}>
+                <div style="flex: 1; min-width: 0;">
+                    <div style="font-weight: 600; color: ${isImported ? '#bbb' : '#fff'}; margin-bottom: 4px; display: flex; align-items: center; flex-wrap: wrap; gap: 2px;">
+                        ${tagBadges}<span>${repo.name}${repo.private ? ' 🔒' : ''}</span>
+                    </div>
+                    <div style="color: #888; font-size: 0.88rem; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${repo.description || 'No description'}</div>
+                    <div style="display: flex; gap: 14px; font-size: 0.8rem; color: #666;">
+                        ${repo.language ? `<span>🔧 ${repo.language}</span>` : ''}
+                        <span>⭐ ${repo.stargazers_count || 0}</span>
+                        ${lastCommit ? `<span>📅 ${lastCommit}</span>` : ''}
+                    </div>
+                </div>
+                <div style="flex-shrink: 0;">${action}</div>
+            </div>`;
+    }).join('');
+}
+
+// ---------- Import by URL — keyword search ----------
+
+function onImportSearchInput() {
+    if (importSearchDebounce) clearTimeout(importSearchDebounce);
+    const q = document.getElementById('importSearchQuery').value.trim();
+    const results = document.getElementById('importSearchResults');
+    if (q.length < 2) {
+        results.style.display = 'none';
+        results.innerHTML = '';
+        return;
+    }
+    importSearchDebounce = setTimeout(runImportSearch, 350);
+}
+
+async function runImportSearch() {
+    const q = document.getElementById('importSearchQuery').value.trim();
+    const results = document.getElementById('importSearchResults');
+    if (!q) return;
+
+    results.style.display = 'block';
+    results.innerHTML = '<div style="padding: 12px; color: #888;">Searching…</div>';
+
+    try {
+        const res = await fetch(`/api/github/search?q=${encodeURIComponent(q)}&per_page=10`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Search failed');
+        const items = data.items || [];
+        if (!items.length) {
+            results.innerHTML = '<div style="padding: 12px; color: #888;">No matches.</div>';
+            return;
+        }
+        results.innerHTML = items.map(repo => `
+            <div onclick="selectImportSearchResult('${repo.html_url}')"
+                 style="padding: 10px 12px; border-bottom: 1px solid #1f1f1f; cursor: pointer;"
+                 onmouseover="this.style.background='#1a1a1a'" onmouseout="this.style.background=''">
+                <div style="font-weight: 600; color: #fff;">${repo.full_name}</div>
+                <div style="color: #888; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${repo.description || 'No description'}</div>
+                <div style="color: #666; font-size: 0.78rem; margin-top: 4px;">
+                    ⭐ ${repo.stargazers_count || 0}
+                    ${repo.language ? ` · ${repo.language}` : ''}
+                </div>
+            </div>`).join('');
+    } catch (err) {
+        results.innerHTML = `<div style="padding: 12px; color: #ef4444;">${err.message}</div>`;
+    }
+}
+
+function selectImportSearchResult(url) {
+    document.getElementById('importUrl').value = url;
+    const results = document.getElementById('importSearchResults');
+    results.style.display = 'none';
+    results.innerHTML = '';
 }
 
 async function importByUrl() {
@@ -1469,9 +1837,10 @@ async function importByUrl() {
         alert('Enter a GitHub URL');
         return;
     }
-    
     await importGitHubRepo(url);
-    hideBulkImport();
+    // Clear the URL field so the user can import another without retyping.
+    // Modal stays open — user clicks Done when finished.
+    document.getElementById('importUrl').value = '';
 }
 
 async function loadGitHubRepos() {
@@ -1518,7 +1887,7 @@ async function loadGitHubRepos() {
         renderGitHubReposList();
         
         document.getElementById('repoList').style.display = 'block';
-        document.getElementById('repoCount').textContent = githubRepos.length;
+        // renderGitHubReposList() updates the count itself, taking active filters into account.
     } catch (error) {
         alert(`Error: ${error.message}`);
     }
@@ -1526,17 +1895,42 @@ async function loadGitHubRepos() {
 
 function renderGitHubReposList() {
     const container = document.getElementById('repoListContent');
-    
+
     if (githubRepos.length === 0) {
         container.innerHTML = '<div class="empty-state">No repositories found</div>';
         return;
     }
-    
-    // Check which repos are already imported
-    const importedUrls = new Set(projects.filter(p => p.repo_url).map(p => p.repo_url));
-    
-    container.innerHTML = githubRepos.map(repo => {
-        const isImported = importedUrls.has(repo.html_url);
+
+    // Normalize URLs so .git suffix / trailing-slash / case differences don't break matching.
+    const normalizeUrl = u => (u || '').toLowerCase().replace(/\.git$/, '').replace(/\/$/, '');
+    const importedUrls = new Set(projects.filter(p => p.repo_url).map(p => normalizeUrl(p.repo_url)));
+
+    // Apply filters from the bulk-tab search input and import-status dropdown.
+    const searchTerm = (document.getElementById('bulkSearch')?.value || '').trim().toLowerCase();
+    const statusFilter = document.getElementById('bulkStatusFilter')?.value || 'all';
+
+    const filteredRepos = githubRepos.filter(repo => {
+        const isImported = importedUrls.has(normalizeUrl(repo.html_url));
+        if (statusFilter === 'new' && isImported) return false;
+        if (statusFilter === 'imported' && !isImported) return false;
+        if (searchTerm) {
+            const hay = `${repo.name} ${repo.description || ''}`.toLowerCase();
+            if (!hay.includes(searchTerm)) return false;
+        }
+        return true;
+    });
+
+    // Update the count chip to reflect what's actually shown.
+    const countEl = document.getElementById('repoCount');
+    if (countEl) countEl.textContent = filteredRepos.length;
+
+    if (filteredRepos.length === 0) {
+        container.innerHTML = '<div class="empty-state">No repositories match the current filters</div>';
+        return;
+    }
+
+    container.innerHTML = filteredRepos.map(repo => {
+        const isImported = importedUrls.has(normalizeUrl(repo.html_url));
         const statusBadge = getStatusBadge(repo.inferredStatus);
         
         return `
@@ -1719,12 +2113,34 @@ function renderPinned() {
 // Selected tab persists in localStorage so the user lands back where they left.
 // Time range and language filter apply across all tabs.
 
+// Cards (default) or Rows. Persisted across reloads.
+function getExploreView() {
+    return localStorage.getItem('launchpad.exploreView') || 'cards';
+}
+
+function setExploreView(mode) {
+    localStorage.setItem('launchpad.exploreView', mode);
+    // Toggle button active state.
+    const cardsBtn = document.getElementById('exploreViewCards');
+    const rowsBtn  = document.getElementById('exploreViewRows');
+    if (cardsBtn) cardsBtn.classList.toggle('active', mode === 'cards');
+    if (rowsBtn)  rowsBtn.classList.toggle('active', mode === 'rows');
+    // Swap containers immediately, then re-run loadExplore so the right one
+    // gets rendered (cheaper than maintaining two simultaneous renders).
+    const grid = document.getElementById('exploreGrid');
+    const list = document.getElementById('exploreList');
+    if (grid) grid.style.display = mode === 'cards' ? '' : 'none';
+    if (list) list.style.display = mode === 'rows' ? '' : 'none';
+    loadExplore();
+}
+
 const EXPLORE_CATEGORIES = [
-    { key: 'trending',  label: '🔥 Trending',     hint: 'Most stars in the selected time window' },
-    { key: 'popular',   label: '⭐ Most Popular', hint: 'All-time most starred (ignores time range)' },
-    { key: 'new',       label: '🚀 New & Rising', hint: 'Recently created and gaining stars' },
-    { key: 'discussed', label: '💬 Most Discussed', hint: 'Popular repos with recent activity' },
-    { key: 'forked',    label: '🔱 Most Forked',  hint: 'Most-forked repos in the time window' }
+    { key: 'trending',    label: '🔥 Trending',      hint: 'Created recently and gaining stars fast' },
+    { key: 're-emerging', label: '🌅 Re-emerging',   hint: 'Older repos shipping renewed activity this week' },
+    { key: 'popular',     label: '⭐ Most Popular',  hint: 'All-time most starred (ignores time range)' },
+    { key: 'new',         label: '🚀 New & Rising',  hint: 'Recently created, lower star floor — surfaces small hot repos' },
+    { key: 'discussed',   label: '💬 Most Discussed', hint: 'Popular repos with active issues + recent activity' },
+    { key: 'forked',      label: '🔱 Most Forked',   hint: 'Most-forked repos in the time window' }
 ];
 
 function getExploreTab() {
@@ -1742,6 +2158,8 @@ function clearExploreFilters() {
     const topic = document.getElementById('exploreTopic');
     const user = document.getElementById('exploreUser');
     const range = document.getElementById('exploreRange');
+    const spoken = document.getElementById('exploreSpokenLang');
+    if (spoken) spoken.value = 'english'; // Reset to the sensible default, not "any".
     if (lang) lang.value = '';
     if (topic) topic.value = '';
     if (user) user.value = '';
@@ -1764,39 +2182,202 @@ async function loadExplore() {
         ).join('');
     }
 
+    const mode = getExploreView();
     const grid = document.getElementById('exploreGrid');
-    if (!grid) return;
-    grid.innerHTML = '<div class="loading">Loading…</div>';
+    const list = document.getElementById('exploreList');
+    if (!grid || !list) return;
+    // Ensure the right container is visible (also handled in setExploreView,
+    // but we re-assert here so a first-render after page-load lands correctly).
+    grid.style.display = mode === 'cards' ? '' : 'none';
+    list.style.display = mode === 'rows' ? '' : 'none';
+    // Sync toggle button visual state with what we'll render.
+    const cardsBtn = document.getElementById('exploreViewCards');
+    const rowsBtn  = document.getElementById('exploreViewRows');
+    if (cardsBtn) cardsBtn.classList.toggle('active', mode === 'cards');
+    if (rowsBtn)  rowsBtn.classList.toggle('active', mode === 'rows');
+    const target = mode === 'cards' ? grid : list;
+    target.innerHTML = '<div class="loading">Loading…</div>';
 
     const params = new URLSearchParams({ category: activeKey, since: range });
     if (lang) params.set('language', lang);
     if (topic) params.set('topic', topic);
     if (user) params.set('user', user);
 
+    const spokenLangEl = document.getElementById('exploreSpokenLang');
+    // First call after page-load: restore the user's last choice from localStorage.
+    if (spokenLangEl && !spokenLangEl.dataset.restored) {
+        const saved = localStorage.getItem('launchpad.exploreSpokenLang');
+        if (saved) spokenLangEl.value = saved;
+        spokenLangEl.dataset.restored = '1';
+    }
+    const spokenLang = spokenLangEl?.value || 'english';
+    if (spokenLangEl) localStorage.setItem('launchpad.exploreSpokenLang', spokenLang);
+
     try {
         const response = await fetch(`/api/github/explore?${params.toString()}`);
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Failed to load category');
-        const repos = data.items || [];
+
+        // Spoken-language filter — client-side because GitHub's search API
+        // doesn't expose a "description language" qualifier. Detection looks at
+        // both `description` and `name` so repos with no description still
+        // get a fair shake when the name itself is plainly English.
+        const rawRepos = data.items || [];
+        const filteredRepos = filterReposBySpokenLanguage(rawRepos, spokenLang);
+        // Take the top 15 after filtering — the server over-fetches 50 to
+        // leave headroom for the strict English filter.
+        const repos = filteredRepos.slice(0, 15);
+
         if (repos.length === 0) {
-            grid.innerHTML = '<div class="empty-state" style="grid-column: 1 / -1;">No repos match this category — try a different time range or language filter.</div>';
+            const noLangHint = spokenLang === 'english'
+                ? 'No English-only results matched. Try switching to "Any language" in the filter row.'
+                : 'No repos match this category — try a different time range, topic, or language filter.';
+            target.innerHTML = `<div class="empty-state" style="grid-column: 1 / -1;">${noLangHint}</div>`;
             renderPinned();
             return;
         }
-        // Render with #1 styled larger (matches GitHub tab Top 5 pattern)
-        grid.innerHTML = repos.map((repo, i) => renderExploreRepoCard(repo, i)).join('');
+        if (mode === 'cards') {
+            // Cards view — #1 styled larger (matches GitHub tab Top 5 pattern).
+            grid.innerHTML = repos.map((repo, i) => renderExploreRepoCard(repo, i)).join('');
+        } else {
+            // Rows view — compact horizontal layout, all rows same size.
+            list.innerHTML = repos.map((repo, i) => renderExploreRepoRow(repo, i)).join('');
+        }
         renderPinned();
     } catch (error) {
         console.error('Error loading explore:', error);
-        grid.innerHTML = `<div class="empty-state" style="grid-column: 1 / -1;">Couldn't load: ${escapeHtml(error.message)}</div>`;
+        target.innerHTML = `<div class="empty-state" style="grid-column: 1 / -1;">Couldn't load: ${escapeHtml(error.message)}</div>`;
     }
 }
 
-// Same data as renderGitHubRepoCard but with #1 styling for the leader.
+// Compact one-line-ish row layout (GitHub-tab "rows" pattern). Same info as
+// the card but laid out horizontally: rank · name+description · stars · forks ·
+// language · last push · actions.
+function renderExploreRepoRow(repo, rank) {
+    const isFirst = rank === 0;
+    const stars = (repo.stargazers_count || 0).toLocaleString();
+    const forks = (repo.forks_count || 0).toLocaleString();
+    const openIssues = (repo.open_issues_count || 0).toLocaleString();
+    const pinned = isPinned(repo.full_name);
+    const repoJson = encodeURIComponent(JSON.stringify({
+        full_name: repo.full_name, description: repo.description, html_url: repo.html_url,
+        language: repo.language, stargazers_count: repo.stargazers_count || 0, forks_count: repo.forks_count || 0
+    }));
+    const rankColor = isFirst ? '#60a5fa' : '#666';
+    const rankWeight = isFirst ? '700' : '600';
+    const pushedRel  = repo.pushed_at  ? relTime(repo.pushed_at)  : '';
+    const topics = Array.isArray(repo.topics) ? repo.topics.slice(0, 4) : [];
+    const topicChips = topics.length
+        ? topics.map(t => `<span onclick="event.stopPropagation(); applyExploreTopic('${escapeHtml(t)}')" style="background: #0f1a2a; color: #93c5fd; padding: 1px 6px; border-radius: 999px; font-size: 0.7rem; cursor: pointer; border: 1px solid #1e2a3a;">#${escapeHtml(t)}</span>`).join(' ')
+        : '';
+    return `
+        <div style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: #0f0f0f; border: 1px solid ${isFirst ? '#60a5fa' : '#222'}; border-radius: 8px; margin-bottom: 8px;">
+            <div style="color: ${rankColor}; font-weight: ${rankWeight}; min-width: 32px; text-align: center; font-size: ${isFirst ? '1rem' : '0.85rem'};">#${rank + 1}</div>
+            <div style="flex: 1; min-width: 0;">
+                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 2px;">
+                    <a href="${repo.html_url}" target="_blank" style="color: #93c5fd; text-decoration: none; font-weight: 600;">${escapeHtml(repo.full_name)}</a>
+                    ${repo.language ? `<span style="color: #888; font-size: 0.78rem;">🔧 ${escapeHtml(repo.language)}</span>` : ''}
+                    ${pushedRel ? `<span style="color: #666; font-size: 0.75rem;">⚡ ${pushedRel}</span>` : ''}
+                </div>
+                <div style="color: #bbb; font-size: 0.86rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 4px;">${escapeHtml(repo.description || 'No description')}</div>
+                ${topicChips ? `<div style="display: flex; gap: 4px; flex-wrap: wrap;">${topicChips}</div>` : ''}
+            </div>
+            <div style="display: flex; gap: 12px; align-items: center; color: #888; font-size: 0.82rem; flex-shrink: 0;">
+                <span title="Stars">⭐ ${stars}</span>
+                <span title="Forks">🍴 ${forks}</span>
+                <span title="Open issues">🐛 ${openIssues}</span>
+            </div>
+            <div style="display: flex; gap: 6px; flex-shrink: 0;">
+                <button class="btn btn-sm ${pinned ? 'btn-primary' : 'btn-secondary'}" onclick="togglePin('${repo.full_name}', '${repoJson}'); event.stopPropagation();" title="${pinned ? 'Unpin' : 'Pin to top'}">📌</button>
+                <button class="btn btn-sm" onclick="importGitHubRepo('${repo.html_url}')">📥</button>
+            </div>
+        </div>
+    `;
+}
+
+// Detect the dominant script in a string. Returns one of:
+//   'english' (latin-script), 'chinese', 'japanese', 'russian', 'arabic',
+//   'hebrew', 'hindi', 'thai', 'korean', 'other', 'unknown'
+// The check is character-set based rather than dictionary-based — fast, good
+// enough for "is this English or not" decisions on repo descriptions, and
+// doesn't ship a 1MB language model. Japanese is detected via hiragana /
+// katakana presence (mixed CJK + hiragana = Japanese, pure CJK = Chinese).
+function detectScript(text) {
+    if (!text) return 'unknown';
+    const s = String(text);
+    let cjk = 0, hiragana = 0, katakana = 0, hangul = 0;
+    let cyrillic = 0, arabic = 0, hebrew = 0, devanagari = 0, thai = 0, latin = 0;
+    for (const ch of s) {
+        const c = ch.codePointAt(0);
+        if (c >= 0x4E00 && c <= 0x9FFF) cjk++;
+        else if (c >= 0x3040 && c <= 0x309F) hiragana++;
+        else if (c >= 0x30A0 && c <= 0x30FF) katakana++;
+        else if (c >= 0xAC00 && c <= 0xD7AF) hangul++;
+        else if ((c >= 0x0400 && c <= 0x04FF) || (c >= 0x0500 && c <= 0x052F)) cyrillic++;
+        else if (c >= 0x0600 && c <= 0x06FF) arabic++;
+        else if (c >= 0x0590 && c <= 0x05FF) hebrew++;
+        else if (c >= 0x0900 && c <= 0x097F) devanagari++;
+        else if (c >= 0x0E00 && c <= 0x0E7F) thai++;
+        else if ((c >= 0x41 && c <= 0x5A) || (c >= 0x61 && c <= 0x7A)) latin++;
+    }
+    // Japanese is the only script with hiragana/katakana, so any of those wins.
+    if (hiragana || katakana) return 'japanese';
+    if (hangul > latin) return 'korean';
+    if (cjk > latin) return 'chinese';
+    if (cyrillic > latin) return 'russian';
+    if (arabic > latin) return 'arabic';
+    if (hebrew > latin) return 'hebrew';
+    if (devanagari > latin) return 'hindi';
+    if (thai > latin) return 'thai';
+    if (latin > 0) return 'english'; // Latin script — bucket as English (covers ES/FR/DE/etc. too, which is fine for our purpose)
+    return 'unknown';
+}
+
+// Strict "is any non-Latin alphabetic character present" check.
+// True if the string contains CJK ideographs, hiragana, katakana, hangul,
+// Cyrillic, Arabic, Hebrew, Devanagari, or Thai. Emoji, math symbols, and
+// general punctuation are ignored — we only care about *writing scripts*.
+// This is the gate for the English filter: we reject anything with even a
+// little CJK because a mixed Chinese/English description is still off-putting
+// to an English-only reader.
+const NON_LATIN_SCRIPT_RE = /[぀-ゟ゠-ヿ一-鿿豈-﫿㐀-䶿가-힯Ѐ-ӿԀ-ԯ؀-ۿݐ-ݿ֐-׿ऀ-ॿ฀-๿]/;
+
+function hasNonLatinScript(s) {
+    if (!s) return false;
+    return NON_LATIN_SCRIPT_RE.test(String(s));
+}
+
+function filterReposBySpokenLanguage(repos, lang) {
+    if (!lang || lang === 'any') return repos;
+    return repos.filter(repo => {
+        // Combine description + name so repos with no description still pass
+        // when the name is plainly English.
+        const text = `${repo.description || ''} ${repo.name || ''}`;
+        if (lang === 'english') {
+            // STRICT: reject if ANY non-Latin alphabetic character is present,
+            // not just when non-Latin is dominant. A description with even a
+            // handful of CJK chars is annoying to an English reader.
+            return !hasNonLatinScript(text);
+        }
+        if (lang === 'other') {
+            return hasNonLatinScript(text);
+        }
+        // Specific non-English buckets (chinese/japanese/russian/etc.) — fall
+        // back to the dominant-script detector so we don't include repos that
+        // just happen to have a Chinese character.
+        return detectScript(text) === lang;
+    });
+}
+
+// Render one Explore card with rank styling for #1 and rich metadata.
+// Shows: stars, forks, watchers, open issues, language, license, topic chips,
+// created date, last-push date, and full description (no truncation).
 function renderExploreRepoCard(repo, rank) {
     const isFirst = rank === 0;
     const stars = (repo.stargazers_count || 0).toLocaleString();
     const forks = (repo.forks_count || 0).toLocaleString();
+    const watchers = (repo.watchers_count || 0).toLocaleString();
+    const openIssues = (repo.open_issues_count || 0).toLocaleString();
     const pinned = isPinned(repo.full_name);
     const repoJson = encodeURIComponent(JSON.stringify({
         full_name: repo.full_name,
@@ -1812,26 +2393,91 @@ function renderExploreRepoCard(repo, rank) {
     const rankBadge = isFirst
         ? '<span style="background: #60a5fa; color: #0b1220; font-weight: 700; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; margin-right: 8px;">#1</span>'
         : `<span style="color: #666; font-weight: 600; margin-right: 8px;">#${rank + 1}</span>`;
+
+    // Topic chips — clickable to filter the Explore page. GitHub returns up
+    // to 20 topics; we show the first 5 to avoid blowing out the card.
+    const topics = Array.isArray(repo.topics) ? repo.topics.slice(0, 5) : [];
+    const topicChips = topics.length ? `
+        <div style="display: flex; gap: 4px; flex-wrap: wrap; margin-top: 8px;">
+            ${topics.map(t =>
+                `<span onclick="event.stopPropagation(); applyExploreTopic('${escapeHtml(t)}')"
+                       style="background: #0f1a2a; color: #93c5fd; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; cursor: pointer; border: 1px solid #1e2a3a;"
+                       title="Filter by topic">#${escapeHtml(t)}</span>`
+            ).join('')}
+        </div>
+    ` : '';
+
+    // Dates — show both creation and last-push so users can see freshness.
+    const createdRel = repo.created_at ? relTime(repo.created_at) : null;
+    const pushedRel  = repo.pushed_at  ? relTime(repo.pushed_at)  : null;
+
+    // License is a nested object when present; null otherwise.
+    const license = repo.license && repo.license.spdx_id && repo.license.spdx_id !== 'NOASSERTION'
+        ? repo.license.spdx_id : null;
+
     return `
         <div class="github-repo-card project-card" style="${cardStyle}">
             <div class="repo-header" style="display: flex; justify-content: space-between; align-items: start; gap: 8px;">
-                <div class="repo-name" style="font-weight: 600; color: #93c5fd;">${rankBadge}${escapeHtml(repo.full_name)}</div>
-                <div style="display: flex; gap: 6px; align-items: center;">
-                    <button class="btn btn-sm ${pinned ? 'btn-primary' : 'btn-secondary'}" onclick="togglePin('${repo.full_name}', '${repoJson}'); event.stopPropagation();" title="${pinned ? 'Unpin' : 'Pin to top'}">${pinned ? '📌 Pinned' : '📌 Pin'}</button>
-                    <div class="repo-stars" style="color: #888; font-size: 0.9rem;">⭐ ${stars}</div>
+                <div style="flex: 1; min-width: 0;">
+                    <div class="repo-name" style="font-weight: 600; color: #93c5fd;">
+                        ${rankBadge}
+                        <a href="${repo.html_url}" target="_blank" style="color: #93c5fd; text-decoration: none;">${escapeHtml(repo.full_name)}</a>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 6px; align-items: center; flex-shrink: 0;">
+                    <button class="btn btn-sm ${pinned ? 'btn-primary' : 'btn-secondary'}" onclick="togglePin('${repo.full_name}', '${repoJson}'); event.stopPropagation();" title="${pinned ? 'Unpin' : 'Pin to top'}">${pinned ? '📌' : '📌'}</button>
                 </div>
             </div>
-            <div class="repo-description" style="margin: 8px 0; color: #ccc;">${escapeHtml(repo.description || 'No description')}</div>
-            <div class="repo-meta" style="color: #888; font-size: 0.85rem; display: flex; gap: 12px;">
-                ${repo.language ? `<span>🔧 ${escapeHtml(repo.language)}</span>` : ''}
-                <span>🍴 ${forks} forks</span>
+
+            <div class="repo-description" style="margin: 8px 0; color: #ccc; line-height: 1.5;">${escapeHtml(repo.description || 'No description')}</div>
+
+            ${topicChips}
+
+            <div class="repo-meta" style="color: #888; font-size: 0.85rem; display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px;">
+                <span title="Stars">⭐ ${stars}</span>
+                <span title="Forks">🍴 ${forks}</span>
+                <span title="Watchers">👁 ${watchers}</span>
+                <span title="Open issues">🐛 ${openIssues}</span>
+                ${repo.language ? `<span title="Primary language">🔧 ${escapeHtml(repo.language)}</span>` : ''}
+                ${license ? `<span title="License">📄 ${escapeHtml(license)}</span>` : ''}
             </div>
+
+            <div style="color: #666; font-size: 0.78rem; display: flex; gap: 14px; flex-wrap: wrap; margin-top: 8px;">
+                ${createdRel ? `<span title="Created ${repo.created_at}">📅 Created ${createdRel}</span>` : ''}
+                ${pushedRel  ? `<span title="Last push ${repo.pushed_at}">⚡ Last push ${pushedRel}</span>` : ''}
+            </div>
+
             <div class="repo-actions" style="margin-top: 12px; display: flex; gap: 8px;">
                 <button class="btn btn-sm" onclick="importGitHubRepo('${repo.html_url}')">📥 Import</button>
                 <a href="${repo.html_url}" target="_blank" class="btn btn-sm btn-secondary">View on GitHub</a>
             </div>
         </div>
     `;
+}
+
+// Set the topic filter field and re-run Explore. Wired to topic chips on cards.
+function applyExploreTopic(topic) {
+    const input = document.getElementById('exploreTopic');
+    if (input) {
+        input.value = topic;
+        loadExplore();
+    }
+}
+
+// Human-readable relative time ("3d ago", "2mo ago"). Used for the new
+// created/pushed labels on Explore cards.
+function relTime(iso) {
+    if (!iso) return '';
+    const then = new Date(iso).getTime();
+    if (!then) return '';
+    const diffSec = (Date.now() - then) / 1000;
+    if (diffSec < 60)     return 'just now';
+    if (diffSec < 3600)   return Math.floor(diffSec / 60) + 'm ago';
+    if (diffSec < 86400)  return Math.floor(diffSec / 3600) + 'h ago';
+    if (diffSec < 604800) return Math.floor(diffSec / 86400) + 'd ago';
+    if (diffSec < 2592000) return Math.floor(diffSec / 604800) + 'w ago';
+    if (diffSec < 31536000) return Math.floor(diffSec / 2592000) + 'mo ago';
+    return Math.floor(diffSec / 31536000) + 'y ago';
 }
 
 function renderGitHubRepoCard(repo) {
@@ -1875,19 +2521,29 @@ async function importGitHubRepo(url) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url })
         });
-        
+
         const data = await response.json();
-        
+
         if (!response.ok) {
             if (response.status === 409) {
-                alert('Repository already imported');
+                showToast('Already imported');
                 return;
             }
             throw new Error(data.error || 'Import failed');
         }
-        
-        alert(`Imported ${data.project.name}!`);
-        loadProjects();
+
+        // Reload projects so the imported repo shows up in `projects`. Await so
+        // the Browse re-render below sees the new row.
+        await loadProjects();
+        showToast(`Imported ${data.project.name}`);
+
+        // If the Browse GitHub modal is open, re-render the list in place so the
+        // tag flips from NEW → NOT CLONED (or whatever sync_status applies) and
+        // the row drops down into the "Already imported" section immediately.
+        const modal = document.getElementById('bulkImportModal');
+        if (modal && modal.style.display !== 'none' && browseReposCache) {
+            renderBrowseRepos(browseReposCache.user, browseReposCache.repos);
+        }
     } catch (error) {
         alert(`Error: ${error.message}`);
     }

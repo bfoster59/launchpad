@@ -246,16 +246,23 @@ app.get('/api/github/search', async (req, res) => {
 
 // ========== EXPLORE — outward-facing GitHub discovery ==========
 //
-// One endpoint, five categories. Each category builds an appropriate GitHub
+// One endpoint, six categories. Each category builds an appropriate GitHub
 // search query + sort key. `since` controls the time window for tabs that
-// filter by date; the all-time tab (popular) ignores it. `language` filter
-// applies across all tabs.
+// filter by date; the all-time "popular" tab ignores it. `language`, `topic`,
+// and `user` filters apply across all tabs.
 //
-// Note: GitHub's search API doesn't expose downloads (those live on
-// npm/PyPI/crates.io). "Most Discussed" approximates engagement via the
-// `updated` sort with a stars floor — repos that are both popular AND being
-// actively touched bubble up. "help-wanted-issues" sort exists but biases
-// toward unfinished projects, which isn't what we want here.
+// Design notes:
+// - We always exclude `archived:false fork:false mirror:false` to cut the
+//   noise that otherwise dominates the "discussed" + "forked" tabs.
+// - `per_page=10` (was 5) — users wanted broader visibility per category.
+// - The `since` date is computed fresh on every request so the same query
+//   doesn't get GitHub-cached into showing identical results all week.
+// - `re-emerging` is a new category that surfaces *older* repos shipping
+//   activity this week — fills the gap our prior "trending" left (it only
+//   showed brand-new repos via created:>{since}).
+// - True star velocity (Δstars/day) is not directly queryable in the GitHub
+//   search API. Implementing it properly requires daily snapshots — see
+//   roadmap Phase 2.
 app.get('/api/github/explore', async (req, res) => {
     try {
         const { language = '', since = 'monthly', category = 'trending',
@@ -270,6 +277,7 @@ app.get('/api/github/explore', async (req, res) => {
         };
         const ms = ranges[since] || ranges.monthly;
         const sinceDate = new Date(now - ms).toISOString().split('T')[0];
+        const week  = new Date(now - 7 * 86400000).toISOString().split('T')[0];
 
         // Sanitise free-text filters before building qualifiers — github's
         // search syntax is whitespace-separated, so a stray space would
@@ -281,31 +289,57 @@ app.get('/api/github/explore', async (req, res) => {
         const userQ = user ? ` user:${clean(user)}` : '';
         const filters = `${langQ}${topicQ}${userQ}`;
 
-        // Each category: { q, sort, order } passed straight to search.repos.
+        // Universal noise filters — keep these on every query, including
+        // user-scoped ones. Forks and archived repos almost never belong in
+        // discovery lists, and stripping mirrors hides duplicates.
+        const noiseFilters = ` archived:false fork:false mirror:false`;
+
         // When a user filter is set, we relax the stars floors — small/personal
-        // repos won't pass them. Keeping a date floor on time-window tabs.
-        const dateGate = userQ ? '' : ` stars:>10`;
-        const popGate = userQ ? '' : ` stars:>500`;
-        const forkGate = userQ ? '' : ` forks:>50`;
-        const popAllTime = userQ ? `stars:>0` : `stars:>1000`;
+        // repos won't pass them. Keeping date floors on time-window tabs.
+        const trendGate = userQ ? '' : ` stars:>50`;
+        const newGate   = userQ ? '' : ` stars:>5`;
+        const discussGate = userQ ? '' : ` stars:>500 help-wanted-issues:>3`;
+        const forkGate  = userQ ? '' : ` forks:>50`;
+        const popAllTime = userQ ? `stars:>0` : `stars:>5000`;
+        const reEmergeGate = userQ ? '' : ` stars:>1000`;
 
         const categories = {
-            trending:  { q: `created:>${sinceDate}${dateGate}${filters}`,             sort: 'stars',   order: 'desc' },
-            popular:   { q: `${popAllTime}${filters}`,                                 sort: 'stars',   order: 'desc' },
-            new:       { q: `created:>${sinceDate}${userQ ? '' : ' stars:>5'}${filters}`, sort: 'stars',   order: 'desc' },
-            discussed: { q: `pushed:>${sinceDate}${popGate}${filters}`,                sort: 'updated', order: 'desc' },
-            forked:    { q: `created:>${sinceDate}${forkGate}${filters}`,              sort: 'forks',   order: 'desc' }
+            // Brand-new + hot: created recently, sorted by stars accumulated since.
+            trending:    { q: `created:>${sinceDate}${trendGate}${noiseFilters}${filters}`,
+                           sort: 'stars',   order: 'desc' },
+            // All-time popular within the filter set.
+            popular:     { q: `${popAllTime}${noiseFilters}${filters}`,
+                           sort: 'stars',   order: 'desc' },
+            // New & rising: more permissive star floor than trending so we
+            // surface smaller new repos picking up steam.
+            new:         { q: `created:>${sinceDate}${newGate}${noiseFilters}${filters}`,
+                           sort: 'stars',   order: 'desc' },
+            // Active development on popular repos with engagement signals.
+            discussed:   { q: `pushed:>${sinceDate}${discussGate}${noiseFilters}${filters}`,
+                           sort: 'updated', order: 'desc' },
+            // Heavily forked, time-windowed.
+            forked:      { q: `created:>${sinceDate}${forkGate}${noiseFilters}${filters}`,
+                           sort: 'forks',   order: 'desc' },
+            // Older repos shipping activity in the last week — the gap our prior
+            // "trending" left out. Catches projects that already existed but
+            // surged into renewed development.
+            're-emerging': { q: `pushed:>${week}${reEmergeGate} created:<${sinceDate}${noiseFilters}${filters}`,
+                             sort: 'updated', order: 'desc' }
         };
 
         const cat = categories[category];
         if (!cat) return res.status(400).json({ error: `Unknown category: ${category}` });
 
         const client = octokit || new Octokit();
+        // Over-fetch (50 vs the 15 we surface) so client-side filters — most
+        // notably the strict English-only spoken-language filter — can drop
+        // a generous chunk of results and still leave a full page of 15.
+        // GitHub Search API caps at 100 per page; 50 is a comfortable middle.
         const { data } = await client.search.repos({
             q: cat.q,
             sort: cat.sort,
             order: cat.order,
-            per_page: 5
+            per_page: 50
         });
 
         res.json(data);
@@ -456,6 +490,66 @@ app.post('/api/projects/refresh-all', async (req, res) => {
             skipped: all.length - cloned.length,
             results
         });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Fast filesystem-only scan for the Import modal. NO network. NO git fetch.
+// For each imported project, decide where its clone would live (db.local_path
+// when set, else `${clone_base}/${project.name}`), check whether that dir
+// exists with a `.git` subdir, and run a quick `git status --porcelain` to
+// detect uncommitted changes. Also opportunistically backfill local_path on
+// projects where we detect a clone at the canonical path.
+app.get('/api/local-clone-detect', async (req, res) => {
+    try {
+        const fs = require('fs');
+        const path = require('path');
+        const { exec } = require('child_process');
+        const util = require('util');
+        const execPromise = util.promisify(exec);
+
+        const baseDir = getCloneBaseDir();
+        const all = db.getAllProjects();
+
+        const results = {};
+        await Promise.all(all.map(async (p) => {
+            // Resolve candidate path: stored local_path wins, else canonical.
+            let candidate = p.local_path;
+            let autoDetected = false;
+            if (!candidate) {
+                candidate = path.join(baseDir, p.name);
+                autoDetected = true;
+            }
+
+            const exists = candidate && fs.existsSync(candidate);
+            const hasGit = exists && fs.existsSync(path.join(candidate, '.git'));
+
+            if (!hasGit) {
+                results[p.id] = { status: 'not_cloned', path: null, dirty: false };
+                return;
+            }
+
+            // Detected — backfill local_path if we found a clone at the canonical location.
+            if (autoDetected && !p.local_path) {
+                try { db.updateProject(p.id, { local_path: candidate }); } catch (e) { /* non-fatal */ }
+            }
+
+            // Cheap dirty check — no fetch, just local working-tree state.
+            let dirty = false;
+            try {
+                const { stdout } = await execPromise(`git -C "${candidate}" status --porcelain`, { timeout: 3000 });
+                dirty = stdout.trim().length > 0;
+            } catch (e) { /* leave dirty = false */ }
+
+            results[p.id] = {
+                status: dirty ? 'dirty' : 'cloned',
+                path: candidate,
+                dirty
+            };
+        }));
+
+        res.json({ base_dir: baseDir, results });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

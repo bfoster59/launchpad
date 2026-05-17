@@ -109,25 +109,70 @@
                 
                 <!-- Tab Navigation -->
                 <div style="display: flex; gap: 4px; margin-bottom: 24px; border-bottom: 2px solid #333;">
-                    <button id="importUrlTab" class="import-tab active" onclick="showImportTab('url')">Import by URL</button>
+                    <button id="importBrowseTab" class="import-tab active" onclick="showImportTab('browse')">Browse GitHub</button>
+                    <button id="importUrlTab" class="import-tab" onclick="showImportTab('url')">Import by URL</button>
                     <button id="importBulkTab" class="import-tab" onclick="showImportTab('bulk')">Bulk Import</button>
                 </div>
-                
-                <!-- Import by URL -->
-                <div id="importUrlSection">
-                    <p style="color: #888; margin-bottom: 16px;">
-                        Import a single public repository by URL (no token required)
+
+                <!-- Browse GitHub — your own account, single-click import -->
+                <div id="importBrowseSection">
+                    <p style="color: #888; margin-bottom: 12px;">
+                        Your GitHub repositories — click any one to import it.
+                        <span id="browseUserLabel" style="color: #60a5fa; margin-left: 8px;"></span>
                     </p>
+                    <!-- Filters -->
+                    <div style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center;">
+                        <input type="text" id="browseSearch" placeholder="Find a repository…"
+                               oninput="renderBrowseFromCache()"
+                               style="flex: 1; padding: 8px 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem;">
+                        <select id="browseStatusFilter" onchange="renderBrowseFromCache()"
+                                style="padding: 8px 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem;">
+                            <option value="all">Status: All</option>
+                            <option value="new">🟢 NEW only</option>
+                            <option value="imported">All imported</option>
+                            <option value="dirty">🔴 DIRTY</option>
+                            <option value="ahead">⚠️ AHEAD</option>
+                            <option value="behind">⬇️ BEHIND</option>
+                            <option value="synced">✓ SYNCED</option>
+                            <option value="cloned">📂 CLONED</option>
+                            <option value="not_cloned">📦 NOT CLONED</option>
+                        </select>
+                    </div>
+                    <div id="browseRepoList" style="max-height: 480px; overflow-y: auto; margin-bottom: 16px;">
+                        <div class="loading">Loading your repositories…</div>
+                    </div>
+                    <div style="display: flex; gap: 12px;">
+                        <button class="btn btn-secondary" onclick="loadBrowseRepos(true)">🔄 Refresh</button>
+                        <button class="btn btn-primary" onclick="hideBulkImport()">Done</button>
+                        <button class="btn btn-secondary" onclick="hideBulkImport()">Cancel</button>
+                    </div>
+                </div>
+
+                <!-- Import by URL — keyword search OR hand-typed URL -->
+                <div id="importUrlSection" style="display: none;">
+                    <p style="color: #888; margin-bottom: 16px;">
+                        Search GitHub by keyword, or paste a repository URL directly (no token required for public repos).
+                    </p>
+                    <div style="margin-bottom: 16px;">
+                        <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">🔍 Search GitHub</label>
+                        <input type="text" id="importSearchQuery"
+                               placeholder="e.g. nextjs starter, react dashboard"
+                               oninput="onImportSearchInput()"
+                               onkeydown="if(event.key==='Enter'){event.preventDefault();runImportSearch();}"
+                               style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                        <div id="importSearchResults" style="margin-top: 8px; max-height: 260px; overflow-y: auto; display: none; background: #0f0f0f; border: 1px solid #333; border-radius: 8px;"></div>
+                    </div>
                     <div style="margin-bottom: 16px;">
                         <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">GitHub Repository URL</label>
                         <input type="text" id="importUrl" placeholder="https://github.com/username/repo" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
                     </div>
                     <div style="display: flex; gap: 12px;">
                         <button class="btn btn-primary" onclick="importByUrl()">Import</button>
+                        <button class="btn btn-secondary" onclick="hideBulkImport()">Done</button>
                         <button class="btn btn-secondary" onclick="hideBulkImport()">Cancel</button>
                     </div>
                 </div>
-                
+
                 <!-- Bulk Import -->
                 <div id="importBulkSection" style="display: none;">
                     <p style="color: #888; margin-bottom: 16px;">
@@ -140,14 +185,27 @@
                     </div>
                     <div style="display: flex; gap: 12px; margin-bottom: 24px;">
                         <button class="btn btn-primary" onclick="loadGitHubRepos()">Load My Repos</button>
+                        <button class="btn btn-secondary" onclick="hideBulkImport()">Done</button>
                         <button class="btn btn-secondary" onclick="hideBulkImport()">Cancel</button>
                     </div>
-                    
+
                     <!-- Repo List -->
                     <div id="repoList" style="display: none;">
+                        <!-- Filters -->
+                        <div style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center;">
+                            <input type="text" id="bulkSearch" placeholder="Find a repository…"
+                                   oninput="renderGitHubReposList()"
+                                   style="flex: 1; padding: 8px 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem;">
+                            <select id="bulkStatusFilter" onchange="renderGitHubReposList()"
+                                    style="padding: 8px 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem;">
+                                <option value="all">Show: All</option>
+                                <option value="new" selected>Not yet imported</option>
+                                <option value="imported">Already imported</option>
+                            </select>
+                        </div>
                         <div style="margin-bottom: 16px; padding: 12px; background: #0f0f0f; border-radius: 8px;">
                             <div style="display: flex; justify-content: space-between; align-items: center;">
-                                <div style="color: #e0e0e0;"><span id="repoCount">0</span> repositories found</div>
+                                <div style="color: #e0e0e0;"><span id="repoCount">0</span> repositories shown</div>
                                 <div style="display: flex; gap: 8px;">
                                     <button class="btn btn-sm btn-secondary" onclick="selectAllRepos()">Select All</button>
                                     <button class="btn btn-sm btn-primary" onclick="importSelectedRepos()">Import Selected</button>
@@ -261,6 +319,18 @@
                 <option value="yearly">This year</option>
             </select>
 
+            <select id="exploreSpokenLang" onchange="loadExplore()" title="Filter repos by description language"
+                    style="padding: 6px 10px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem;">
+                <option value="english" selected>🇺🇸 English only</option>
+                <option value="any">🌐 Any language</option>
+                <option value="chinese">🇨🇳 Chinese</option>
+                <option value="japanese">🇯🇵 Japanese</option>
+                <option value="russian">🇷🇺 Russian</option>
+                <option value="arabic">🇸🇦 Arabic</option>
+                <option value="hindi">🇮🇳 Hindi</option>
+                <option value="other">Other (non-English)</option>
+            </select>
+
             <button class="btn btn-secondary" onclick="clearExploreFilters()" style="font-size: 0.85rem;">Clear filters</button>
         </div>
 
@@ -277,14 +347,20 @@
             <div id="searchResults" class="project-grid"></div>
         </div>
 
-        <!-- Tabbed Top 5 — five categories, #1 styled larger. All filters
-             above apply across every tab. -->
+        <!-- Tabbed Top 15 — six categories, #1 styled larger in card mode.
+             All filters above apply across every tab. Cards/Rows toggle
+             mirrors the GitHub-tab pattern. -->
         <div class="section" style="margin-top: 24px;">
             <div class="section-header" style="margin-bottom: 16px;">
-                <h3 style="font-size: 1.1rem;">Discover — Top 5 by category</h3>
+                <h3 style="font-size: 1.1rem;">Discover — Top 15 by category</h3>
+                <div class="view-toggle" style="display: flex; gap: 2px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; padding: 2px;">
+                    <button id="exploreViewCards" class="view-toggle-btn active" onclick="setExploreView('cards')" title="Card grid">🔲 Cards</button>
+                    <button id="exploreViewRows" class="view-toggle-btn" onclick="setExploreView('rows')" title="Compact rows">☰ Rows</button>
+                </div>
             </div>
             <div id="exploreTabs" style="display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 16px;"></div>
             <div id="exploreGrid" class="project-grid"></div>
+            <div id="exploreList" class="neo-repo-list" style="display: none;"></div>
         </div>
     </div>
 
