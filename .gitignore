@@ -2,6 +2,7 @@ node_modules/
 *.db
 *.db-shm
 *.db-wal
+*.empty-backup-*
 *.log
 .env
 .env.local
@@ -9,3 +10,9 @@ node_modules/
 dist/
 _fix-*.js
 
+
+.remember/
+
+# internal dev artifacts — kept in FOREMAN central, never in the product repo
+foreman/
+docs/superpowers/

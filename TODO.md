@@ -9,8 +9,8 @@ Resumed 2026-04-20 after a 2.5-month gap. App works; these are the gaps observed
 ## Settings page (doesn't exist yet)
 
 - [ ] Add a Settings tab/page in the main nav
-- [ ] **Persist GitHub PAT** — currently memory-only, lost on every server restart. Store in `.env` (simple) or a SQLite `settings` table (cleaner, supports encryption later)
-- [ ] **Auto-load PAT on boot** from env/DB so users don't re-paste
+- [x] **Persist GitHub PAT** — DONE. Stored in the SQLite `settings` table via `db.setSetting('github_pat', …)`; survives restarts.
+- [x] **Auto-load PAT on boot** — DONE. `initOctokit()` reads `db.getSetting('github_pat') || process.env.GITHUB_TOKEN` at startup, so no re-paste.
 - [ ] **Repos clone path** config (currently hardcoded or derived from cwd — check). Align with the ghq layout: `C:\Work\github.com\<user>\<repo>\`
 - [ ] "Test connection" button that pings `/user` with the saved PAT to verify scope
 
@@ -18,7 +18,7 @@ Resumed 2026-04-20 after a 2.5-month gap. App works; these are the gaps observed
 
 - [x] **Clone path updated** — `server.js:350` now uses `/home/bfoster/<project>` (drops the `projects/` middle layer), resolving to `C:\home\bfoster\<project>` on Windows, `/home/bfoster/<project>` on Linux. Canonical layout locked in 2026-04-20.
 - [x] **Edit Project dead-end fixed** — added `_editBackupHTML` module state + `_restoreDetailFromBackup()` helper + new `cancelEdit()` function in `app.js`. `editProject` now snapshots the detail container's markup before swapping in the edit form; Cancel and successful Save both restore the snapshot before `showProject()` is called, so `detailTitle`/`detailDescription`/etc. exist when showProject hydrates them. Verified in Chrome DevTools: Cancel returns to detail view, no `TypeError` in console.
-- [ ] **Import by URL doesn't use auth** — `server.js:481` creates `new Octokit()` with no token, so private repos 404. Use authenticated Octokit when a PAT is set. 2-line fix.
+- [x] **Import by URL doesn't use auth** — DONE. The import-url route now uses `octokit || new Octokit()`, so private repos resolve when a PAT is stored.
 
 ## Git actions (iteration 1)
 

@@ -2,9 +2,15 @@ const Database = require('better-sqlite3');
 const path = require('path');
 
 class LaunchpadDB {
-    constructor() {
-        this.db = new Database(path.join(__dirname, 'launchpad.db'));
+    // dbPath defaults to the on-disk app DB; pass an explicit path or ':memory:'
+    // (used by the test suite) to run against an isolated database.
+    constructor(dbPath) {
+        this.db = new Database(dbPath || path.join(__dirname, 'launchpad.db'));
         this.db.pragma('journal_mode = WAL');
+        // Passively fold the WAL back into the main DB every ~1000 pages so it
+        // doesn't grow unbounded while the server runs (it had ballooned to ~3MB
+        // against a ~52KB DB). A TRUNCATE checkpoint in close() resets it to 0.
+        this.db.pragma('wal_autocheckpoint = 1000');
         this.init();
     }
 
@@ -99,6 +105,20 @@ class LaunchpadDB {
 
             CREATE INDEX IF NOT EXISTS idx_lesson_progress_user ON lesson_progress(username);
             CREATE INDEX IF NOT EXISTS idx_learner_badges_user ON learner_badges(username);
+
+            -- Star-velocity snapshots for the Explore page. The GitHub Search
+            -- API doesn't expose "stars in last 7 days" — we have to derive it
+            -- by remembering yesterday's count and diffing. Snapshots are
+            -- written opportunistically every time Explore fetches a repo, and
+            -- throttled so we don't bloat the table with one row per second.
+            CREATE TABLE IF NOT EXISTS repo_star_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_full_name TEXT NOT NULL,
+                stargazers_count INTEGER NOT NULL,
+                fetched_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_snapshots_repo_time
+                ON repo_star_snapshots (repo_full_name, fetched_at);
         `);
 
         // App-building fields added 2026-04-20 — additive, non-breaking.
@@ -118,6 +138,20 @@ class LaunchpadDB {
         // last_commit_at > last_seen_commit_at the card shows an
         // "External activity" badge so they notice github-side commits.
         tryAlter('ALTER TABLE projects ADD COLUMN last_seen_commit_at INTEGER');
+        // GitHub repo visibility. NULL = unknown (not yet backfilled), 0 = public,
+        // 1 = private. Captured on import and refreshed by the boot-time
+        // visibility backfill in server.js.
+        tryAlter('ALTER TABLE projects ADD COLUMN is_private INTEGER');
+
+        // Enforce at most one project per repo_url (NULLs allowed — manual
+        // projects have no repo). Partial unique index. Guarded: if the table
+        // already holds legacy duplicate repo_urls the creation throws, so log
+        // and continue rather than crash boot.
+        try {
+            this.db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_repo_url ON projects(repo_url) WHERE repo_url IS NOT NULL').run();
+        } catch (e) {
+            console.warn('[db] skipped unique repo_url index — legacy duplicates present:', e.message);
+        }
     }
 
     // ========== SETTINGS ==========
@@ -148,29 +182,48 @@ class LaunchpadDB {
     
     addProject(project) {
         const stmt = this.db.prepare(`
-            INSERT INTO projects (name, description, status, category, tech_stack, target_market, monetization, pricing, repo_url, live_url, local_path, source, readme, prompt, prd, stack, references_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO projects (name, description, status, category, tech_stack, target_market, monetization, pricing, repo_url, live_url, local_path, source, readme, prompt, prd, stack, references_json, is_private)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
-        const result = stmt.run(
-            project.name,
-            project.description || null,
-            project.status || 'idea',
-            project.category || 'app',
-            project.tech_stack || null,
-            project.target_market || null,
-            project.monetization || null,
-            project.pricing || null,
-            project.repo_url || null,
-            project.live_url || null,
-            project.local_path || null,
-            project.source || 'manual',
-            project.readme || null,
-            project.prompt || null,
-            project.prd || null,
-            project.stack || null,
-            project.references_json || null
-        );
+        // Accept GitHub's `private` boolean or an explicit `is_private`; store
+        // as 0/1, or null when caller didn't supply visibility.
+        const visibility = project.is_private ?? project.private;
+        const isPrivate = visibility === undefined || visibility === null
+            ? null : (visibility ? 1 : 0);
+
+        let result;
+        try {
+            result = stmt.run(
+                project.name,
+                project.description || null,
+                project.status || 'idea',
+                project.category || 'app',
+                project.tech_stack || null,
+                project.target_market || null,
+                project.monetization || null,
+                project.pricing || null,
+                project.repo_url || null,
+                project.live_url || null,
+                project.local_path || null,
+                project.source || 'manual',
+                project.readme || null,
+                project.prompt || null,
+                project.prd || null,
+                project.stack || null,
+                project.references_json || null,
+                isPrivate
+            );
+        } catch (e) {
+            // Race with a concurrent import of the same repo_url — the unique
+            // index rejects the duplicate. Return the project that already owns
+            // it instead of throwing (idempotent "ON CONFLICT" behavior).
+            if (/UNIQUE constraint failed/i.test(e.message) && project.repo_url) {
+                const existing = this.db.prepare('SELECT * FROM projects WHERE repo_url = ?').get(project.repo_url);
+                if (existing) return existing;
+            }
+            throw e;
+        }
 
         return this.getProject(result.lastInsertRowid);
     }
@@ -208,7 +261,7 @@ class LaunchpadDB {
                          'target_market', 'monetization', 'pricing', 'repo_url', 'live_url',
                          'local_path', 'source', 'readme',
                          'prompt', 'prd', 'stack', 'references_json',
-                         'last_commit_at', 'last_seen_commit_at'];
+                         'last_commit_at', 'last_seen_commit_at', 'is_private'];
         
         allowed.forEach(field => {
             if (updates[field] !== undefined) {
@@ -430,7 +483,88 @@ class LaunchpadDB {
         tx(username);
     }
 
+    // ========== STAR-VELOCITY SNAPSHOTS ==========
+
+    // Throttled insert. If we already have a snapshot for this repo within the
+    // last `minIntervalSec` (default 6 hours), skip — otherwise insert. Returns
+    // true when a new row was written so callers can log if useful.
+    recordStarSnapshot(repoFullName, stars, minIntervalSec = 6 * 60 * 60) {
+        if (!repoFullName) return false;
+        const now = Math.floor(Date.now() / 1000);
+        const recent = this.db.prepare(`
+            SELECT fetched_at FROM repo_star_snapshots
+            WHERE repo_full_name = ? AND fetched_at > ?
+            ORDER BY fetched_at DESC LIMIT 1
+        `).get(repoFullName, now - minIntervalSec);
+        if (recent) return false;
+        this.db.prepare(`
+            INSERT INTO repo_star_snapshots (repo_full_name, stargazers_count, fetched_at)
+            VALUES (?, ?, ?)
+        `).run(repoFullName, stars, now);
+        return true;
+    }
+
+    // Bulk version — wraps the throttled insert in a transaction for speed.
+    // Returns count of new snapshots actually written.
+    recordStarSnapshotsBulk(rows, minIntervalSec) {
+        let written = 0;
+        const tx = this.db.transaction((rs) => {
+            for (const { repo_full_name, stargazers_count } of rs) {
+                if (this.recordStarSnapshot(repo_full_name, stargazers_count, minIntervalSec)) {
+                    written++;
+                }
+            }
+        });
+        tx(rows || []);
+        return written;
+    }
+
+    // Return Δstars over the last `days` days for one repo. Looks for the
+    // oldest snapshot within the window and diffs against the most recent
+    // (or the supplied `currentStars` if provided — typical use is "we just
+    // fetched stars=N, what's the delta from N days ago"). Returns null when
+    // there isn't enough history to compute a meaningful delta.
+    getStarDelta(repoFullName, days = 7, currentStars = null) {
+        if (!repoFullName) return null;
+        const now = Math.floor(Date.now() / 1000);
+        const cutoff = now - days * 86400;
+        // Oldest snapshot within the window — that's the "N days ago" anchor.
+        const old = this.db.prepare(`
+            SELECT stargazers_count, fetched_at FROM repo_star_snapshots
+            WHERE repo_full_name = ? AND fetched_at >= ?
+            ORDER BY fetched_at ASC LIMIT 1
+        `).get(repoFullName, cutoff);
+        if (!old) return null;
+        let nowStars = currentStars;
+        if (nowStars === null) {
+            const latest = this.db.prepare(`
+                SELECT stargazers_count FROM repo_star_snapshots
+                WHERE repo_full_name = ? ORDER BY fetched_at DESC LIMIT 1
+            `).get(repoFullName);
+            if (!latest) return null;
+            nowStars = latest.stargazers_count;
+        }
+        const ageSeconds = now - old.fetched_at;
+        // Require at least 2h of history before quoting a delta — otherwise the
+        // number is too noisy to be meaningful.
+        if (ageSeconds < 7200) return null;
+        return {
+            delta: nowStars - old.stargazers_count,
+            days_actual: +(ageSeconds / 86400).toFixed(2),
+            anchor_stars: old.stargazers_count,
+            anchor_at: old.fetched_at
+        };
+    }
+
     close() {
+        // Idempotent — may be invoked from both a signal handler and the
+        // process 'exit' handler. Guard first: a pragma on an already-closed
+        // connection throws ("The database connection is not open").
+        if (!this.db.open) return;
+        // Fold the WAL into the main DB and truncate it to 0 bytes so it doesn't
+        // persist multi-MB on disk between restarts. Best-effort: a checkpoint
+        // can fail if another connection holds the DB, but we still must close.
+        try { this.db.pragma('wal_checkpoint(TRUNCATE)'); } catch (e) { /* best effort */ }
         this.db.close();
     }
 }

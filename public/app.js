@@ -27,6 +27,41 @@ function attrStr(s) {
         .replace(/>/g, '&gt;');
 }
 
+// --- Toasts (polish P4): consistent non-blocking feedback ---
+function showToast(message, type = 'info', timeout = 3500) {
+    try {
+        const container = document.getElementById('toastContainer');
+        if (!container) return;
+        const el = document.createElement('div');
+        el.className = 'toast toast-' + type;
+        el.setAttribute('role', 'status');
+        el.textContent = message; // textContent, not innerHTML — safe with error text
+        const close = document.createElement('button');
+        close.className = 'toast-close';
+        close.setAttribute('aria-label', 'Dismiss');
+        close.textContent = '×';
+        close.onclick = () => el.remove();
+        el.appendChild(close);
+        container.appendChild(el);
+        if (timeout > 0) setTimeout(() => { el.classList.add('toast-out'); setTimeout(() => el.remove(), 200); }, timeout);
+    } catch (e) { /* never let a toast break a flow */ }
+}
+window.showToast = showToast;
+
+// --- Keyboard shortcuts (polish P4): number keys 1-6 switch tabs (ignored while typing) ---
+(function () {
+    const ORDER = ['dashboard', 'myProjects', 'github', 'explore', 'learn', 'settings'];
+    document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+        if (e.key >= '1' && e.key <= '6') {
+            const v = ORDER[parseInt(e.key, 10) - 1];
+            if (v && typeof showView === 'function') { showView(v); e.preventDefault(); }
+        }
+    });
+})();
+
 function showView(viewName) {
     // Track previous view (but don't track 'detail' as previous)
     if (currentView !== 'detail') {
@@ -118,7 +153,7 @@ async function saveSettingsPat() {
         await loadSettings();
         showToast('GitHub token saved and loaded.');
     } catch (e) {
-        alert(`Error: ${e.message}`);
+        showToast(`Error: ${e.message}`, 'error');
     }
 }
 
@@ -133,14 +168,14 @@ async function clearSettingsPat() {
         await loadSettings();
         showToast('Token cleared.');
     } catch (e) {
-        alert(`Error: ${e.message}`);
+        showToast(`Error: ${e.message}`, 'error');
     }
 }
 
 async function testGitHubPat() {
     const resEl = document.getElementById('patTestResult');
     resEl.textContent = 'Testing…';
-    resEl.style.color = '#888';
+    resEl.style.color = 'var(--text-muted)';
     try {
         const res = await fetch('/api/settings/test-github', { method: 'POST' });
         const data = await res.json();
@@ -169,7 +204,7 @@ async function saveSettingsTerminal() {
         await loadSettings();
         showToast(value ? `Terminal set to ${value}` : 'Using platform default');
     } catch (e) {
-        alert(`Error: ${e.message}`);
+        showToast(`Error: ${e.message}`, 'error');
     }
 }
 
@@ -190,18 +225,12 @@ async function saveSettingsCloneDir() {
         await loadSettings();
         showToast('Clone base directory saved.');
     } catch (e) {
-        alert(`Error: ${e.message}`);
+        showToast(`Error: ${e.message}`, 'error');
     }
 }
 
-function showToast(msg) {
-    // Simple temp toast — appears top-right for 3s
-    const t = document.createElement('div');
-    t.textContent = msg;
-    t.style.cssText = 'position:fixed;top:16px;right:16px;background:#22c55e;color:#0b0b0b;padding:10px 16px;border-radius:8px;font-weight:600;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
-    document.body.appendChild(t);
-    setTimeout(() => t.remove(), 3000);
-}
+// showToast(message, type, timeout) is defined once near the top (polish P4) —
+// the old always-green top-right toast was replaced by the typed toast system.
 
 function goBack() {
     stopRunningPoll();
@@ -236,27 +265,32 @@ const STACK_PRESETS = [
 ];
 
 function showAddProject() {
+    // The form is injected into #myProjectsList, so make sure that view is
+    // showing — otherwise the "+ New Project" button on the Dashboard injects
+    // into a hidden view and appears to do nothing. (showView -> renderMyProjects
+    // is synchronous, so the form we inject below is not clobbered.)
+    if (currentView !== 'myProjects') showView('myProjects');
     const stackOpts = STACK_PRESETS.map(s => `<option value="${s}">${s}</option>`).join('');
     const form = `
-        <div style="background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 32px; max-width: 760px; margin: 0 auto; grid-column: 1 / -1;">
-            <h2 style="margin-bottom: 8px; color: #fff;">🏗️ New Project — Build Room</h2>
-            <div style="color: #888; margin-bottom: 24px; font-size: 0.9rem;">Capture the vision, stack, and entry-points once so Claude Code has everything it needs when you open a terminal.</div>
+        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 32px; max-width: 760px; margin: 0 auto; grid-column: 1 / -1;">
+            <h2 style="margin-bottom: 8px; color: var(--text);">🏗️ New Project — Build Room</h2>
+            <div style="color: var(--text-muted); margin-bottom: 24px; font-size: 0.9rem;">Capture the vision, stack, and entry-points once so Claude Code has everything it needs when you open a terminal.</div>
             <form id="newProjectForm" onsubmit="saveProject(event)">
 
-                <fieldset style="border: 1px solid #333; border-radius: 10px; padding: 16px; margin-bottom: 20px;">
-                    <legend style="color: #93c5fd; padding: 0 8px;">Basics</legend>
+                <fieldset style="border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 20px;">
+                    <legend style="color: var(--accent-soft); padding: 0 8px;">Basics</legend>
                     <div style="margin-bottom: 14px;">
-                        <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">Project Name *</label>
-                        <input type="text" name="name" required style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                        <label style="display: block; margin-bottom: 6px; color: var(--text);">Project Name *</label>
+                        <input type="text" name="name" required style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
                     </div>
                     <div style="margin-bottom: 14px;">
-                        <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">One-line description</label>
-                        <input type="text" name="description" placeholder="What this project is, in one sentence" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                        <label style="display: block; margin-bottom: 6px; color: var(--text);">One-line description</label>
+                        <input type="text" name="description" placeholder="What this project is, in one sentence" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
                     </div>
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
                         <div>
-                            <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">Status</label>
-                            <select name="status" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                            <label style="display: block; margin-bottom: 6px; color: var(--text);">Status</label>
+                            <select name="status" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
                                 <option value="idea">💡 Idea</option>
                                 <option value="planning">📋 Planning</option>
                                 <option value="building">🔨 Building</option>
@@ -265,8 +299,8 @@ function showAddProject() {
                             </select>
                         </div>
                         <div>
-                            <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">Category</label>
-                            <select name="category" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                            <label style="display: block; margin-bottom: 6px; color: var(--text);">Category</label>
+                            <select name="category" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
                                 <option value="app">📱 App</option>
                                 <option value="saas">☁️ SaaS</option>
                                 <option value="utility">🔧 Utility</option>
@@ -276,50 +310,50 @@ function showAddProject() {
                     </div>
                 </fieldset>
 
-                <fieldset style="border: 1px solid #333; border-radius: 10px; padding: 16px; margin-bottom: 20px;">
-                    <legend style="color: #93c5fd; padding: 0 8px;">Concept</legend>
+                <fieldset style="border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 20px;">
+                    <legend style="color: var(--accent-soft); padding: 0 8px;">Concept</legend>
                     <div style="margin-bottom: 14px;">
-                        <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">Prompt / vision</label>
-                        <textarea name="prompt" rows="4" placeholder="Describe the app in natural language — the prompt you'd give Claude Code to start building. Who is it for? What problem does it solve? What are the core features?" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: inherit;"></textarea>
+                        <label style="display: block; margin-bottom: 6px; color: var(--text);">Prompt / vision</label>
+                        <textarea name="prompt" rows="4" placeholder="Describe the app in natural language — the prompt you'd give Claude Code to start building. Who is it for? What problem does it solve? What are the core features?" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: inherit;"></textarea>
                     </div>
                     <div>
-                        <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">PRD (Product Requirements Document) <span style="color: #666; font-weight: normal;">— optional, fill later from Edit</span></label>
-                        <textarea name="prd" rows="5" placeholder="Detailed requirements: user stories, acceptance criteria, non-goals, constraints." style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: monospace; font-size: 0.9rem;"></textarea>
+                        <label style="display: block; margin-bottom: 6px; color: var(--text);">PRD (Product Requirements Document) <span style="color: var(--text-subtle); font-weight: normal;">— optional, fill later from Edit</span></label>
+                        <textarea name="prd" rows="5" placeholder="Detailed requirements: user stories, acceptance criteria, non-goals, constraints." style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: monospace; font-size: 0.9rem;"></textarea>
                     </div>
                 </fieldset>
 
-                <fieldset style="border: 1px solid #333; border-radius: 10px; padding: 16px; margin-bottom: 20px;">
-                    <legend style="color: #93c5fd; padding: 0 8px;">Stack</legend>
+                <fieldset style="border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 20px;">
+                    <legend style="color: var(--accent-soft); padding: 0 8px;">Stack</legend>
                     <div style="margin-bottom: 14px;">
-                        <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">Preset</label>
-                        <select name="stack_preset" onchange="document.querySelector('textarea[name=stack]').value = this.value === 'Custom (describe below)' ? '' : this.value" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                        <label style="display: block; margin-bottom: 6px; color: var(--text);">Preset</label>
+                        <select name="stack_preset" onchange="document.querySelector('textarea[name=stack]').value = this.value === 'Custom (describe below)' ? '' : this.value" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
                             <option value="">— pick a preset (optional) —</option>
                             ${stackOpts}
                         </select>
                     </div>
                     <div>
-                        <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">Stack detail</label>
-                        <textarea name="stack" rows="2" placeholder="e.g., Next.js 15 + TypeScript + Tailwind + SQLite (better-sqlite3) + Drizzle ORM" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: monospace;"></textarea>
+                        <label style="display: block; margin-bottom: 6px; color: var(--text);">Stack detail</label>
+                        <textarea name="stack" rows="2" placeholder="e.g., Next.js 15 + TypeScript + Tailwind + SQLite (better-sqlite3) + Drizzle ORM" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: monospace;"></textarea>
                     </div>
                 </fieldset>
 
-                <fieldset style="border: 1px solid #333; border-radius: 10px; padding: 16px; margin-bottom: 20px;">
-                    <legend style="color: #93c5fd; padding: 0 8px;">Paths &amp; Links</legend>
+                <fieldset style="border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 20px;">
+                    <legend style="color: var(--accent-soft); padding: 0 8px;">Paths &amp; Links</legend>
                     <div style="margin-bottom: 14px;">
-                        <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">Local Path <span style="color: #666; font-weight: normal;">— where Claude Code will work</span></label>
-                        <input type="text" name="local_path" placeholder="e.g., C:\\home\\bfoster\\my-project" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: monospace;">
+                        <label style="display: block; margin-bottom: 6px; color: var(--text);">Local Path <span style="color: var(--text-subtle); font-weight: normal;">— where Claude Code will work</span></label>
+                        <input type="text" name="local_path" placeholder="e.g., C:\\home\\bfoster\\my-project" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: monospace;">
                     </div>
                     <div style="margin-bottom: 14px;">
-                        <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">GitHub Repository URL</label>
-                        <input type="url" name="repo_url" placeholder="https://github.com/user/repo" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                        <label style="display: block; margin-bottom: 6px; color: var(--text);">GitHub Repository URL</label>
+                        <input type="url" name="repo_url" placeholder="https://github.com/user/repo" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
                     </div>
                     <div style="margin-bottom: 14px;">
-                        <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">Live URL</label>
-                        <input type="url" name="live_url" placeholder="https://your-app.vercel.app" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                        <label style="display: block; margin-bottom: 6px; color: var(--text);">Live URL</label>
+                        <input type="url" name="live_url" placeholder="https://your-app.vercel.app" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
                     </div>
                     <div>
-                        <label style="display: block; margin-bottom: 6px; color: #e0e0e0;">References <span style="color: #666; font-weight: normal;">— one per line (URLs, doc titles, file paths)</span></label>
-                        <textarea name="references" rows="3" placeholder="https://nextjs.org/docs&#10;C:\\reference\\PRD-draft.md&#10;https://example.com/api-spec" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: monospace; font-size: 0.9rem;"></textarea>
+                        <label style="display: block; margin-bottom: 6px; color: var(--text);">References <span style="color: var(--text-subtle); font-weight: normal;">— one per line (URLs, doc titles, file paths)</span></label>
+                        <textarea name="references" rows="3" placeholder="https://nextjs.org/docs&#10;C:\\reference\\PRD-draft.md&#10;https://example.com/api-spec" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: monospace; font-size: 0.9rem;"></textarea>
                     </div>
                 </fieldset>
 
@@ -391,7 +425,7 @@ async function saveProject(event) {
             showView('myProjects');
         }
     } catch (error) {
-        alert(`Error: ${error.message}`);
+        showToast(`Error: ${error.message}`, 'error');
     }
 }
 
@@ -485,7 +519,7 @@ function renderProjectCard(p) {
     // Cleared automatically when the detail view is opened.
     let externalBadge = '';
     if (p.last_commit_at && p.last_commit_at > (p.last_seen_commit_at || 0)) {
-        externalBadge = `<span title="New github activity since you last opened this project" style="background: #2563eb; color: #fff; padding: 2px 8px; border-radius: 999px; font-size: 0.7rem; font-weight: 600; margin-left: 6px;">↗ External</span>`;
+        externalBadge = `<span title="New github activity since you last opened this project" style="background: var(--accent); color: var(--accent-contrast); padding: 2px 8px; border-radius: 999px; font-size: 0.7rem; font-weight: 600; margin-left: 6px;">↗ External</span>`;
     }
 
     return `
@@ -494,11 +528,11 @@ function renderProjectCard(p) {
                 <div class="project-status status-${p.status}">${p.status}</div>
                 <div>${externalBadge}${syncBadge}</div>
             </div>
-            <div class="project-name">${sourceIcon} ${localIcon} ${p.name}</div>
-            <div class="project-description">${p.description || 'No description'}</div>
+            <div class="project-name">${sourceIcon} ${localIcon} ${escapeHtml(p.name)}</div>
+            <div class="project-description">${escapeHtml(p.description || 'No description')}</div>
             <div class="project-meta">
-                <span>${categoryIcon} ${p.category}</span>
-                ${p.tech_stack ? `<span>🔧 ${p.tech_stack.split(',')[0].trim()}</span>` : ''}
+                <span>${categoryIcon} ${escapeHtml(p.category)}</span>
+                ${p.tech_stack ? `<span>🔧 ${escapeHtml(p.tech_stack.split(',')[0].trim())}</span>` : ''}
             </div>
         </div>
     `;
@@ -555,10 +589,10 @@ async function showProject(id) {
             updatesList.innerHTML = currentProject.updates.map(u => `
                 <div class="update-item">
                     <div class="update-header">
-                        <div class="update-title">${u.title}</div>
+                        <div class="update-title">${escapeHtml(u.title)}</div>
                         <div class="update-time">${formatDate(u.created_at)}</div>
                     </div>
-                    ${u.content ? `<div class="update-content">${u.content}</div>` : ''}
+                    ${u.content ? `<div class="update-content">${escapeHtml(u.content)}</div>` : ''}
                 </div>
             `).join('');
         }
@@ -604,8 +638,8 @@ async function showProject(id) {
                 document.getElementById('referencesList').innerHTML = refs.map(r => {
                     const isUrl = /^https?:\/\//i.test(r);
                     return isUrl
-                        ? `<a href="${escapeHtml(r)}" target="_blank" style="color: #93c5fd;">🔗 ${escapeHtml(r)}</a>`
-                        : `<div style="color: #e0e0e0; font-family: monospace; font-size: 0.9rem;">📄 ${escapeHtml(r)}</div>`;
+                        ? `<a href="${escapeHtml(r)}" target="_blank" style="color: var(--accent-soft);">🔗 ${escapeHtml(r)}</a>`
+                        : `<div style="color: var(--text); font-family: monospace; font-size: 0.9rem;">📄 ${escapeHtml(r)}</div>`;
                 }).join('');
             } else {
                 refsSection.style.display = 'none';
@@ -657,21 +691,21 @@ async function showProject(id) {
         document.getElementById('projectInfo').innerHTML = `
             <div class="info-row">
                 <div class="info-label">Status</div>
-                <div class="info-value">${currentProject.status}</div>
+                <div class="info-value">${escapeHtml(currentProject.status)}</div>
             </div>
             <div class="info-row">
                 <div class="info-label">Category</div>
-                <div class="info-value">${currentProject.category}</div>
+                <div class="info-value">${escapeHtml(currentProject.category)}</div>
             </div>
             <div class="info-row">
                 <div class="info-label">Source</div>
-                <div class="info-value">${currentProject.source}</div>
+                <div class="info-value">${escapeHtml(currentProject.source)}</div>
             </div>
             ${currentProject.local_path ? `
                 <div class="info-row">
                     <div class="info-label">Local Path</div>
                     <div class="info-value" style="font-family: monospace; font-size: 0.85rem;">
-                        <span style="color: #60a5fa; cursor: pointer; text-decoration: underline;" onclick="copyToClipboard(${attrStr(currentProject.local_path)}, this)" title="Click to copy path">${currentProject.local_path}</span>
+                        <span style="color: var(--accent); cursor: pointer; text-decoration: underline;" onclick="copyToClipboard(${attrStr(currentProject.local_path)}, this)" title="Click to copy path">${escapeHtml(currentProject.local_path)}</span>
                         <button class="btn btn-sm" style="margin-left: 8px;" onclick="copyTerminalCommand(${attrStr(currentProject.local_path)})" title="Copy cd command">📋 Copy cd command</button>
                         <button class="btn btn-sm" style="margin-left: 8px;" onclick="openInTerminal(${attrStr(currentProject.local_path)})" title="Open a new terminal in this folder">💻 Open Terminal</button>
                         <button class="btn btn-sm" style="margin-left: 8px;" onclick="openInFolder(${attrStr(currentProject.local_path)})" title="Open in Explorer">📂 Open Folder</button>
@@ -685,63 +719,63 @@ async function showProject(id) {
                 <div class="info-label">Running on</div>
                 <div class="info-value" style="font-family: monospace; font-size: 0.85rem;">
                     <a id="runningUrlLink" href="#" target="_blank" style="color: #22c55e;">—</a>
-                    <span id="runningUrlPid" style="color: #666; margin-left: 8px;"></span>
+                    <span id="runningUrlPid" style="color: var(--text-subtle); margin-left: 8px;"></span>
                 </div>
             </div>
             ${currentProject.stack ? `
                 <div class="info-row">
                     <div class="info-label">Stack</div>
-                    <div class="info-value" style="font-family: monospace; font-size: 0.85rem;">${currentProject.stack}</div>
+                    <div class="info-value" style="font-family: monospace; font-size: 0.85rem;">${escapeHtml(currentProject.stack)}</div>
                 </div>
             ` : ''}
             ${currentProject.tech_stack && currentProject.tech_stack !== currentProject.stack ? `
                 <div class="info-row">
                     <div class="info-label">Tech Stack</div>
-                    <div class="info-value">${currentProject.tech_stack}</div>
+                    <div class="info-value">${escapeHtml(currentProject.tech_stack)}</div>
                 </div>
             ` : ''}
             ${currentProject.repo_url ? `
                 <div class="info-row">
                     <div class="info-label">Repository</div>
-                    <div class="info-value"><a href="${currentProject.repo_url}" target="_blank" style="color: #60a5fa;">View on GitHub</a></div>
+                    <div class="info-value"><a href="${safeUrl(currentProject.repo_url)}" target="_blank" style="color: var(--accent);">View on GitHub</a></div>
                 </div>
             ` : ''}
             ${currentProject.live_url ? `
                 <div class="info-row">
                     <div class="info-label">Live Site</div>
-                    <div class="info-value"><a href="${currentProject.live_url}" target="_blank" style="color: #60a5fa;">Visit</a></div>
+                    <div class="info-value"><a href="${safeUrl(currentProject.live_url)}" target="_blank" style="color: var(--accent);">Visit</a></div>
                 </div>
             ` : ''}
             ${currentProject.target_market ? `
                 <div class="info-row">
                     <div class="info-label">Target Market</div>
-                    <div class="info-value">${currentProject.target_market}</div>
+                    <div class="info-value">${escapeHtml(currentProject.target_market)}</div>
                 </div>
             ` : ''}
             ${currentProject.monetization ? `
                 <div class="info-row">
                     <div class="info-label">Monetization</div>
-                    <div class="info-value">${currentProject.monetization}</div>
+                    <div class="info-value">${escapeHtml(currentProject.monetization)}</div>
                 </div>
             ` : ''}
             ${currentProject.pricing ? `
                 <div class="info-row">
                     <div class="info-label">Pricing</div>
-                    <div class="info-value">${currentProject.pricing}</div>
+                    <div class="info-value">${escapeHtml(currentProject.pricing)}</div>
                 </div>
             ` : ''}
             <div class="info-row">
                 <div class="info-label">Created</div>
-                <div class="info-value" style="color: #888; font-size: 0.85rem;">${currentProject.created_at ? new Date(currentProject.created_at * 1000).toLocaleString() : '—'}</div>
+                <div class="info-value" style="color: var(--text-muted); font-size: 0.85rem;">${currentProject.created_at ? new Date(currentProject.created_at * 1000).toLocaleString() : '—'}</div>
             </div>
             <div class="info-row">
                 <div class="info-label">Last updated</div>
-                <div class="info-value" style="color: #888; font-size: 0.85rem;">${currentProject.updated_at ? new Date(currentProject.updated_at * 1000).toLocaleString() : '—'}</div>
+                <div class="info-value" style="color: var(--text-muted); font-size: 0.85rem;">${currentProject.updated_at ? new Date(currentProject.updated_at * 1000).toLocaleString() : '—'}</div>
             </div>
             ${currentProject.launched_at ? `
                 <div class="info-row">
                     <div class="info-label">Launched</div>
-                    <div class="info-value" style="color: #888; font-size: 0.85rem;">${new Date(currentProject.launched_at * 1000).toLocaleString()}</div>
+                    <div class="info-value" style="color: var(--text-muted); font-size: 0.85rem;">${new Date(currentProject.launched_at * 1000).toLocaleString()}</div>
                 </div>
             ` : ''}
         `;
@@ -773,21 +807,21 @@ async function editProject() {
     if (!currentProject) return;
 
     const form = `
-        <div style="background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 32px; max-width: 800px; margin: 0 auto;">
-            <h2 style="margin-bottom: 24px; color: #fff;">Edit Project</h2>
+        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 32px; max-width: 800px; margin: 0 auto;">
+            <h2 style="margin-bottom: 24px; color: var(--text);">Edit Project</h2>
             <form id="editProjectForm" onsubmit="updateProject(event)">
                 <div style="margin-bottom: 16px;">
-                    <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Project Name *</label>
-                    <input type="text" name="name" value="${currentProject.name}" required style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                    <label style="display: block; margin-bottom: 8px; color: var(--text);">Project Name *</label>
+                    <input type="text" name="name" value="${escapeHtml(currentProject.name)}" required style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
                 </div>
                 <div style="margin-bottom: 16px;">
-                    <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Description</label>
-                    <textarea name="description" rows="3" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">${currentProject.description || ''}</textarea>
+                    <label style="display: block; margin-bottom: 8px; color: var(--text);">Description</label>
+                    <textarea name="description" rows="3" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">${escapeHtml(currentProject.description || '')}</textarea>
                 </div>
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
                     <div>
-                        <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Status</label>
-                        <select name="status" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                        <label style="display: block; margin-bottom: 8px; color: var(--text);">Status</label>
+                        <select name="status" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
                             <option value="idea" ${currentProject.status === 'idea' ? 'selected' : ''}>💡 Idea</option>
                             <option value="planning" ${currentProject.status === 'planning' ? 'selected' : ''}>📋 Planning</option>
                             <option value="building" ${currentProject.status === 'building' ? 'selected' : ''}>🔨 Building</option>
@@ -797,8 +831,8 @@ async function editProject() {
                         </select>
                     </div>
                     <div>
-                        <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Category</label>
-                        <select name="category" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                        <label style="display: block; margin-bottom: 8px; color: var(--text);">Category</label>
+                        <select name="category" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
                             <option value="app" ${currentProject.category === 'app' ? 'selected' : ''}>📱 App</option>
                             <option value="saas" ${currentProject.category === 'saas' ? 'selected' : ''}>☁️ SaaS</option>
                             <option value="utility" ${currentProject.category === 'utility' ? 'selected' : ''}>🔧 Utility</option>
@@ -807,40 +841,40 @@ async function editProject() {
                     </div>
                 </div>
                 <div style="margin-bottom: 16px;">
-                    <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Repository URL</label>
-                    <input type="url" name="repo_url" value="${currentProject.repo_url || ''}" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                    <label style="display: block; margin-bottom: 8px; color: var(--text);">Repository URL</label>
+                    <input type="url" name="repo_url" value="${escapeHtml(currentProject.repo_url || '')}" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
                 </div>
                 <div style="margin-bottom: 16px;">
-                    <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Live URL</label>
-                    <input type="url" name="live_url" value="${currentProject.live_url || ''}" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                    <label style="display: block; margin-bottom: 8px; color: var(--text);">Live URL</label>
+                    <input type="url" name="live_url" value="${escapeHtml(currentProject.live_url || '')}" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
                 </div>
                 <div style="margin-bottom: 16px;">
-                    <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Local Path</label>
-                    <input type="text" name="local_path" value="${(currentProject.local_path || '').replace(/"/g, '&quot;')}" placeholder="e.g., C:\\home\\bfoster\\my-project" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: monospace;">
-                    <div style="color: #666; font-size: 0.8rem; margin-top: 4px;">Where the local clone lives. Leave blank if not cloned yet.</div>
+                    <label style="display: block; margin-bottom: 8px; color: var(--text);">Local Path</label>
+                    <input type="text" name="local_path" value="${escapeHtml(currentProject.local_path || '')}" placeholder="e.g., C:\\home\\bfoster\\my-project" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: monospace;">
+                    <div style="color: var(--text-subtle); font-size: 0.8rem; margin-top: 4px;">Where the local clone lives. Leave blank if not cloned yet.</div>
                 </div>
                 <div style="margin-bottom: 16px;">
-                    <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Stack</label>
-                    <input type="text" name="stack" value="${(currentProject.stack || '').replace(/"/g, '&quot;')}" placeholder="e.g., Next.js 15 + TypeScript + Tailwind + SQLite" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: monospace;">
+                    <label style="display: block; margin-bottom: 8px; color: var(--text);">Stack</label>
+                    <input type="text" name="stack" value="${escapeHtml(currentProject.stack || '')}" placeholder="e.g., Next.js 15 + TypeScript + Tailwind + SQLite" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: monospace;">
                 </div>
                 <div style="margin-bottom: 16px;">
-                    <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Prompt / Vision</label>
-                    <textarea name="prompt" rows="4" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">${escapeHtml(currentProject.prompt || '')}</textarea>
+                    <label style="display: block; margin-bottom: 8px; color: var(--text);">Prompt / Vision</label>
+                    <textarea name="prompt" rows="4" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">${escapeHtml(currentProject.prompt || '')}</textarea>
                 </div>
                 <div style="margin-bottom: 16px;">
-                    <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">PRD</label>
-                    <textarea name="prd" rows="6" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: monospace; font-size: 0.9rem;">${escapeHtml(currentProject.prd || '')}</textarea>
+                    <label style="display: block; margin-bottom: 8px; color: var(--text);">PRD</label>
+                    <textarea name="prd" rows="6" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: monospace; font-size: 0.9rem;">${escapeHtml(currentProject.prd || '')}</textarea>
                 </div>
                 <div style="margin-bottom: 16px;">
-                    <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">References (one per line)</label>
-                    <textarea name="references" rows="3" placeholder="https://docs... or file paths" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: monospace; font-size: 0.9rem;">${(() => {
+                    <label style="display: block; margin-bottom: 8px; color: var(--text);">References (one per line)</label>
+                    <textarea name="references" rows="3" placeholder="https://docs... or file paths" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: monospace; font-size: 0.9rem;">${(() => {
                         try { const r = currentProject.references_json ? JSON.parse(currentProject.references_json) : []; return escapeHtml(r.join('\n')); }
                         catch { return ''; }
                     })()}</textarea>
                 </div>
                 <div style="margin-bottom: 16px;">
-                    <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">README (optional)</label>
-                    <textarea name="readme" rows="8" placeholder="Paste or edit README content here..." style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: monospace; font-size: 0.9rem;">${(currentProject.readme || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</textarea>
+                    <label style="display: block; margin-bottom: 8px; color: var(--text);">README (optional)</label>
+                    <textarea name="readme" rows="8" placeholder="Paste or edit README content here..." style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: monospace; font-size: 0.9rem;">${escapeHtml(currentProject.readme || '')}</textarea>
                 </div>
                 <div style="display: flex; gap: 12px; margin-top: 24px;">
                     <button type="submit" class="btn btn-primary">Save Changes</button>
@@ -893,7 +927,7 @@ async function updateProject(event) {
         loadProjects();
         showProject(currentProject.id);
     } catch (error) {
-        alert(`Error: ${error.message}`);
+        showToast(`Error: ${error.message}`, 'error');
     }
 }
 
@@ -934,7 +968,7 @@ async function refreshRunningState() {
                 if (urlPid) urlPid.textContent = `pid ${data.pid}`;
                 // Tiny chip — kept for backward compatibility, less prominent
                 if (urlChip) {
-                    urlChip.innerHTML = `🟢 <a href="${data.url}" target="_blank" style="color: #93c5fd;">${data.url}</a>`;
+                    urlChip.innerHTML = `🟢 <a href="${data.url}" target="_blank" style="color: var(--accent-soft);">${data.url}</a>`;
                     urlChip.style.display = 'inline';
                 }
                 // Auto-open browser the first time we learn the URL for this session
@@ -994,7 +1028,7 @@ async function stopDevServer() {
         showToast(`Stopped pid ${data.pid}`);
         await refreshRunningState();
     } catch (e) {
-        alert(`Error: ${e.message}`);
+        showToast(`Error: ${e.message}`, 'error');
     }
 }
 
@@ -1015,7 +1049,7 @@ async function runInstallDeps() {
         // Try launching now that deps are present
         await launchProject();
     } catch (e) {
-        alert(`Error: ${e.message}`);
+        showToast(`Error: ${e.message}`, 'error');
     } finally {
         btn.disabled = false;
         btn.textContent = originalText;
@@ -1071,7 +1105,7 @@ async function launchProject() {
             alert(JSON.stringify(data, null, 2));
         }
     } catch (e) {
-        alert(`Error: ${e.message}`);
+        showToast(`Error: ${e.message}`, 'error');
     } finally {
         btn.disabled = false;
         btn.textContent = originalText;
@@ -1127,7 +1161,7 @@ let _commitPreviewState = null;
 async function loadCommitPreview() {
     const el = document.getElementById('commitPreview');
     const submitBtn = document.getElementById('commitSubmitBtn');
-    el.innerHTML = '<div style="color: #888;">Scanning staged changes…</div>';
+    el.innerHTML = '<div style="color: var(--text-muted);">Scanning staged changes…</div>';
     submitBtn.disabled = true;
     _commitPreviewState = null;
 
@@ -1138,13 +1172,13 @@ async function loadCommitPreview() {
         _commitPreviewState = data;
 
         if (data.count === 0) {
-            el.innerHTML = '<div style="color: #888;">Nothing staged — working tree is clean.</div>';
+            el.innerHTML = '<div style="color: var(--text-muted);">Nothing staged — working tree is clean.</div>';
             submitBtn.disabled = false;
             return;
         }
 
         const warnEls = data.warnings.length ? `
-            <div style="margin-bottom: 10px; padding: 10px; background: #2d1818; border: 1px solid #ef4444; border-radius: 6px; color: #fca5a5;">
+            <div style="margin-bottom: 10px; padding: 10px; background: var(--danger-bg); border: 1px solid #ef4444; border-radius: 6px; color: #fca5a5;">
                 <div style="font-weight: 700; margin-bottom: 6px;">⚠️ ${data.warnings.length} warning${data.warnings.length > 1 ? 's' : ''}</div>
                 ${data.warnings.map(w => `<div style="font-family: monospace; font-size: 0.8rem;">• ${escapeHtml(w.message)}</div>`).join('')}
             </div>
@@ -1158,13 +1192,13 @@ async function loadCommitPreview() {
             ].join('');
             const statusColor = ({
                 added: '#22c55e', modified: '#f59e0b', deleted: '#ef4444',
-                renamed: '#60a5fa', copied: '#60a5fa', conflicted: '#ef4444', changed: '#888'
-            })[f.status] || '#888';
+                renamed: 'var(--accent)', copied: 'var(--accent)', conflicted: '#ef4444', changed: 'var(--text-muted)'
+            })[f.status] || 'var(--text-muted)';
             return `
-                <div style="display: flex; gap: 8px; align-items: center; padding: 4px 0; border-bottom: 1px dashed #222;">
+                <div style="display: flex; gap: 8px; align-items: center; padding: 4px 0; border-bottom: 1px dashed var(--border);">
                     <span style="color: ${statusColor}; font-weight: 600; font-size: 0.75rem; text-transform: uppercase; min-width: 70px;">${f.status}</span>
-                    <span style="font-family: monospace; flex: 1; color: #e0e0e0; word-break: break-all;">${escapeHtml(f.path)}</span>
-                    <span style="color: #666; font-size: 0.75rem;">${sizeKb}</span>
+                    <span style="font-family: monospace; flex: 1; color: var(--text); word-break: break-all;">${escapeHtml(f.path)}</span>
+                    <span style="color: var(--text-subtle); font-size: 0.75rem;">${sizeKb}</span>
                     ${chips}
                 </div>
             `;
@@ -1172,7 +1206,7 @@ async function loadCommitPreview() {
 
         el.innerHTML = `
             ${warnEls}
-            <div style="color: #888; margin-bottom: 8px;">${data.count} file${data.count > 1 ? 's' : ''} will be staged (${(data.totalSize / 1024).toFixed(1)} KB total)</div>
+            <div style="color: var(--text-muted); margin-bottom: 8px;">${data.count} file${data.count > 1 ? 's' : ''} will be staged (${(data.totalSize / 1024).toFixed(1)} KB total)</div>
             ${fileRows}
         `;
 
@@ -1211,6 +1245,14 @@ function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, c => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
     })[c]);
+}
+
+// Sanitize a user-supplied URL before putting it in an href. Only http(s) is
+// allowed — a `javascript:`/`data:` scheme would be click-to-XSS. Returns '#'
+// for anything else; the allowed URL is still HTML-escaped for the attribute.
+function safeUrl(u) {
+    const s = String(u == null ? '' : u).trim();
+    return /^https?:\/\//i.test(s) ? escapeHtml(s) : '#';
 }
 
 // Build a starter commit message from the changed-files list. The user is
@@ -1316,7 +1358,7 @@ async function submitCommit() {
         // Red border + scroll into view on failure so the message can't be missed.
         resultEl.style.borderLeft = anyFailure ? '4px solid #ef4444' : '4px solid #10b981';
         resultEl.style.padding = '10px 12px';
-        resultEl.style.background = '#0f0f0f';
+        resultEl.style.background = 'var(--surface-inset)';
         resultEl.style.whiteSpace = 'pre-wrap';
         resultEl.scrollIntoView({ block: 'nearest' });
 
@@ -1337,7 +1379,7 @@ async function submitCommit() {
         resultEl.textContent = `❌ ${e.message}`;
         resultEl.style.borderLeft = '4px solid #ef4444';
         resultEl.style.padding = '10px 12px';
-        resultEl.style.background = '#0f0f0f';
+        resultEl.style.background = 'var(--surface-inset)';
         resultEl.style.whiteSpace = 'pre-wrap';
     } finally {
         submitBtn.disabled = false;
@@ -1358,7 +1400,7 @@ async function pullProject() {
         alert(`✅ Pulled:\n\n${data.output || 'up to date'}`);
         await checkSyncStatus();
     } catch (e) {
-        alert(`Error: ${e.message}`);
+        showToast(`Error: ${e.message}`, 'error');
     }
 }
 
@@ -1385,7 +1427,7 @@ async function cloneProject() {
         showToast(`✅ Cloned to ${data.local_path}`);
         showProject(currentProject.id); // Reload
     } catch (error) {
-        alert(`Error: ${error.message}`);
+        showToast(`Error: ${error.message}`, 'error');
         document.getElementById('cloneBtn').disabled = false;
         document.getElementById('cloneBtn').textContent = 'Clone to Local';
     }
@@ -1425,14 +1467,14 @@ async function checkSyncStatus() {
         }
         
         let statusHTML = `
-            <div style="padding: 16px; background: #0f0f0f; border-left: 4px solid ${statusColor}; border-radius: 8px;">
+            <div style="padding: 16px; background: var(--surface-inset); border-left: 4px solid ${statusColor}; border-radius: 8px;">
                 <div style="font-weight: 600; color: ${statusColor}; margin-bottom: 8px;">
                     ${statusIcon} ${data.status.toUpperCase().replace('_', ' ')}
                 </div>
         `;
         
         if (data.messages) {
-            statusHTML += `<ul style="margin: 8px 0; padding-left: 20px; color: #e0e0e0;">`;
+            statusHTML += `<ul style="margin: 8px 0; padding-left: 20px; color: var(--text);">`;
             data.messages.forEach(msg => {
                 statusHTML += `<li>${msg}</li>`;
             });
@@ -1447,9 +1489,9 @@ async function checkSyncStatus() {
             const branchOffDefault = data.details.onDefaultBranch === false;
             const branchHTML = branchOffDefault
                 ? `<div style="color: #fbbf24;"><strong>Branch:</strong> ${escapeHtml(data.details.branch)} ⚠️ <em>not the default branch (${escapeHtml(data.details.defaultBranch)})</em></div>`
-                : `<div><strong>Branch:</strong> ${escapeHtml(data.details.branch)}${data.details.defaultBranch ? ` <span style="color: #555;">(default)</span>` : ''}</div>`;
+                : `<div><strong>Branch:</strong> ${escapeHtml(data.details.branch)}${data.details.defaultBranch ? ` <span style="color: var(--text-subtle);">(default)</span>` : ''}</div>`;
             statusHTML += `
-                <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #333; font-size: 0.9rem; color: #888;">
+                <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 0.9rem; color: var(--text-muted);">
                     ${branchHTML}
                     <div><strong>Last commit:</strong> ${escapeHtml(data.details.lastCommit.hash)} - ${escapeHtml(data.details.lastCommit.message)}</div>
                     <div><strong>When:</strong> ${escapeHtml(data.details.lastCommit.timeAgo)}</div>
@@ -1461,14 +1503,14 @@ async function checkSyncStatus() {
         // the Pull button so the user sees what will land before they click.
         if (data.status === 'behind' && data.details && data.details.incomingCommits && data.details.incomingCommits.length) {
             const rows = data.details.incomingCommits.map(c => `
-                <div style="font-family: monospace; font-size: 0.8rem; padding: 3px 0; border-bottom: 1px dashed #222;">
-                    <span style="color: #60a5fa;">${escapeHtml(c.hash)}</span>
-                    <span style="color: #888;"> · ${escapeHtml(c.author || 'unknown')}</span>
-                    <span style="color: #e0e0e0;"> — ${escapeHtml(c.message || '')}</span>
+                <div style="font-family: monospace; font-size: 0.8rem; padding: 3px 0; border-bottom: 1px dashed var(--border);">
+                    <span style="color: var(--accent);">${escapeHtml(c.hash)}</span>
+                    <span style="color: var(--text-muted);"> · ${escapeHtml(c.author || 'unknown')}</span>
+                    <span style="color: var(--text);"> — ${escapeHtml(c.message || '')}</span>
                 </div>
             `).join('');
             statusHTML += `
-                <div style="margin-top: 12px; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px;">
+                <div style="margin-top: 12px; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px;">
                     <div style="color: #fbbf24; font-weight: 600; margin-bottom: 6px;">⬇ ${data.details.incomingCommits.length} incoming commit${data.details.incomingCommits.length > 1 ? 's' : ''}:</div>
                     ${rows}
                 </div>
@@ -1499,7 +1541,7 @@ async function checkSyncStatus() {
         btn.disabled = false;
         btn.textContent = '🔄 Check Sync Status';
     } catch (error) {
-        alert(`Error: ${error.message}`);
+        showToast(`Error: ${error.message}`, 'error');
         document.getElementById('syncBtn').disabled = false;
         document.getElementById('syncBtn').textContent = '🔄 Check Sync Status';
     }
@@ -1714,7 +1756,7 @@ function renderBrowseRepos(user, repos) {
     const ordered = [...newOnes, ...existing];
 
     userLabel.innerHTML = user
-        ? `@${user} · ${totalCount} repos${newCount > 0 ? ` · <span style="color: #22c55e; font-weight: 600;">${newCount} new</span>` : ''}${filtered.length !== totalCount ? ` · <span style="color: #888;">${filtered.length} shown</span>` : ''}`
+        ? `@${escapeHtml(user)} · ${totalCount} repos${newCount > 0 ? ` · <span style="color: #22c55e; font-weight: 600;">${newCount} new</span>` : ''}${filtered.length !== totalCount ? ` · <span style="color: var(--text-muted);">${filtered.length} shown</span>` : ''}`
         : '';
 
     if (!repos.length) {
@@ -1735,8 +1777,8 @@ function renderBrowseRepos(user, repos) {
         const lastCommit = repo.daysSinceCommit !== null && repo.daysSinceCommit !== undefined
             ? `${repo.daysSinceCommit}d ago` : '';
         const cursor = isImported ? 'default' : 'pointer';
-        const bg = isImported ? '#0f0f0f' : '#152418';
-        const borderColor = isImported ? '#333' : '#22c55e';
+        const bg = isImported ? 'var(--surface-inset)' : '#152418';
+        const borderColor = isImported ? 'var(--border)' : '#22c55e';
         // Inline Commit button on DIRTY rows — opens the existing commit modal
         // for this project without navigating away from the import modal.
         const isDirty = tags.some(t => t.label === 'DIRTY');
@@ -1745,29 +1787,29 @@ function renderBrowseRepos(user, repos) {
             : '';
         const openBtn = isImported
             ? `<button class="btn btn-sm btn-secondary" onclick="event.stopPropagation(); showProject(${project.id})">Open</button>`
-            : `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); importGitHubRepo('${repo.html_url}')">📥 Import</button>`;
+            : `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); importGitHubRepo(${attrStr(repo.html_url)})">📥 Import</button>`;
         const action = `<div style="display: flex; gap: 6px;">${commitBtn}${openBtn}</div>`;
         const onclickAttr = isImported
             ? ` onclick="showProject(${project.id})"`
-            : ` onclick="importGitHubRepo('${repo.html_url}')"`;
+            : ` onclick="importGitHubRepo(${attrStr(repo.html_url)})"`;
 
         const tagBadges = tags.map(t =>
             `<span style="background: ${t.bg}; color: ${t.fg}; font-weight: 700; padding: 2px 8px; border-radius: 999px; font-size: 0.7rem; margin-right: 6px; letter-spacing: 0.5px;">${t.label}</span>`
         ).join('');
 
         const separator = idx === separatorIdx
-            ? '<div style="margin: 16px 0 10px; padding: 6px 0; color: #666; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 1px; border-top: 1px solid #222;">Already imported</div>'
+            ? '<div style="margin: 16px 0 10px; padding: 6px 0; color: var(--text-subtle); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 1px; border-top: 1px solid var(--border);">Already imported</div>'
             : '';
 
         return `${separator}
             <div style="padding: 12px 14px; background: ${bg}; border: 1px solid ${borderColor}; border-radius: 8px; margin-bottom: 10px; cursor: ${cursor}; display: flex; justify-content: space-between; align-items: center; gap: 12px;"${onclickAttr}>
                 <div style="flex: 1; min-width: 0;">
-                    <div style="font-weight: 600; color: ${isImported ? '#bbb' : '#fff'}; margin-bottom: 4px; display: flex; align-items: center; flex-wrap: wrap; gap: 2px;">
-                        ${tagBadges}<span>${repo.name}${repo.private ? ' 🔒' : ''}</span>
+                    <div style="font-weight: 600; color: ${isImported ? 'var(--text-muted)' : 'var(--text)'}; margin-bottom: 4px; display: flex; align-items: center; flex-wrap: wrap; gap: 2px;">
+                        ${tagBadges}<span>${escapeHtml(repo.name)}${repo.private ? ' 🔒' : ''}</span>
                     </div>
-                    <div style="color: #888; font-size: 0.88rem; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${repo.description || 'No description'}</div>
-                    <div style="display: flex; gap: 14px; font-size: 0.8rem; color: #666;">
-                        ${repo.language ? `<span>🔧 ${repo.language}</span>` : ''}
+                    <div style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(repo.description || 'No description')}</div>
+                    <div style="display: flex; gap: 14px; font-size: 0.8rem; color: var(--text-subtle);">
+                        ${repo.language ? `<span>🔧 ${escapeHtml(repo.language)}</span>` : ''}
                         <span>⭐ ${repo.stargazers_count || 0}</span>
                         ${lastCommit ? `<span>📅 ${lastCommit}</span>` : ''}
                     </div>
@@ -1797,7 +1839,7 @@ async function runImportSearch() {
     if (!q) return;
 
     results.style.display = 'block';
-    results.innerHTML = '<div style="padding: 12px; color: #888;">Searching…</div>';
+    results.innerHTML = '<div style="padding: 12px; color: var(--text-muted);">Searching…</div>';
 
     try {
         const res = await fetch(`/api/github/search?q=${encodeURIComponent(q)}&per_page=10`);
@@ -1805,22 +1847,22 @@ async function runImportSearch() {
         if (!res.ok) throw new Error(data.error || 'Search failed');
         const items = data.items || [];
         if (!items.length) {
-            results.innerHTML = '<div style="padding: 12px; color: #888;">No matches.</div>';
+            results.innerHTML = '<div style="padding: 12px; color: var(--text-muted);">No matches.</div>';
             return;
         }
         results.innerHTML = items.map(repo => `
-            <div onclick="selectImportSearchResult('${repo.html_url}')"
-                 style="padding: 10px 12px; border-bottom: 1px solid #1f1f1f; cursor: pointer;"
-                 onmouseover="this.style.background='#1a1a1a'" onmouseout="this.style.background=''">
-                <div style="font-weight: 600; color: #fff;">${repo.full_name}</div>
-                <div style="color: #888; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${repo.description || 'No description'}</div>
-                <div style="color: #666; font-size: 0.78rem; margin-top: 4px;">
+            <div onclick="selectImportSearchResult(${attrStr(repo.html_url)})"
+                 style="padding: 10px 12px; border-bottom: 1px solid var(--border); cursor: pointer;"
+                 onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''">
+                <div style="font-weight: 600; color: var(--text);">${escapeHtml(repo.full_name)}</div>
+                <div style="color: var(--text-muted); font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(repo.description || 'No description')}</div>
+                <div style="color: var(--text-subtle); font-size: 0.78rem; margin-top: 4px;">
                     ⭐ ${repo.stargazers_count || 0}
-                    ${repo.language ? ` · ${repo.language}` : ''}
+                    ${repo.language ? ` · ${escapeHtml(repo.language)}` : ''}
                 </div>
             </div>`).join('');
     } catch (err) {
-        results.innerHTML = `<div style="padding: 12px; color: #ef4444;">${err.message}</div>`;
+        results.innerHTML = `<div style="padding: 12px; color: #ef4444;">${escapeHtml(err.message)}</div>`;
     }
 }
 
@@ -1889,7 +1931,7 @@ async function loadGitHubRepos() {
         document.getElementById('repoList').style.display = 'block';
         // renderGitHubReposList() updates the count itself, taking active filters into account.
     } catch (error) {
-        alert(`Error: ${error.message}`);
+        showToast(`Error: ${error.message}`, 'error');
     }
 }
 
@@ -1934,7 +1976,7 @@ function renderGitHubReposList() {
         const statusBadge = getStatusBadge(repo.inferredStatus);
         
         return `
-            <div style="padding: 16px; background: ${isImported ? '#0f0f0f' : '#1a1a1a'}; border: 1px solid #333; border-radius: 8px; margin-bottom: 12px;">
+            <div style="padding: 16px; background: ${isImported ? 'var(--surface-inset)' : 'var(--surface)'}; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px;">
                 <div style="display: flex; align-items: start; gap: 12px;">
                     <input type="checkbox" 
                            class="repo-checkbox" 
@@ -1943,12 +1985,12 @@ function renderGitHubReposList() {
                            style="margin-top: 4px;">
                     <div style="flex: 1;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                            <div style="font-weight: 600; color: ${isImported ? '#666' : '#fff'};">${repo.name}</div>
+                            <div style="font-weight: 600; color: ${isImported ? 'var(--text-subtle)' : 'var(--text)'};">${escapeHtml(repo.name)}</div>
                             ${isImported ? '<span style="color: #10b981; font-size: 0.85rem;">✓ Imported</span>' : statusBadge}
                         </div>
-                        <div style="color: #888; font-size: 0.9rem; margin-bottom: 8px;">${repo.description || 'No description'}</div>
-                        <div style="display: flex; gap: 16px; font-size: 0.85rem; color: #666;">
-                            ${repo.language ? `<span>🔧 ${repo.language}</span>` : ''}
+                        <div style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 8px;">${escapeHtml(repo.description || 'No description')}</div>
+                        <div style="display: flex; gap: 16px; font-size: 0.85rem; color: var(--text-subtle);">
+                            ${repo.language ? `<span>🔧 ${escapeHtml(repo.language)}</span>` : ''}
                             <span>⭐ ${repo.stargazers_count}</span>
                             ${repo.daysSinceCommit !== null ? `<span>Last commit: ${repo.daysSinceCommit}d ago</span>` : ''}
                         </div>
@@ -1962,7 +2004,7 @@ function renderGitHubReposList() {
 function getStatusBadge(status) {
     const colors = {
         idea: '#6b7280',
-        planning: '#3b82f6',
+        planning: 'var(--accent-strong)',
         building: '#f59e0b',
         launched: '#10b981',
         paused: '#ef4444'
@@ -2007,7 +2049,7 @@ async function importSelectedRepos() {
         loadProjects();
         hideBulkImport();
     } catch (error) {
-        alert(`Error: ${error.message}`);
+        showToast(`Error: ${error.message}`, 'error');
     }
 }
 
@@ -2263,33 +2305,34 @@ function renderExploreRepoRow(repo, rank) {
         full_name: repo.full_name, description: repo.description, html_url: repo.html_url,
         language: repo.language, stargazers_count: repo.stargazers_count || 0, forks_count: repo.forks_count || 0
     }));
-    const rankColor = isFirst ? '#60a5fa' : '#666';
+    const rankColor = isFirst ? 'var(--accent)' : 'var(--text-subtle)';
     const rankWeight = isFirst ? '700' : '600';
     const pushedRel  = repo.pushed_at  ? relTime(repo.pushed_at)  : '';
     const topics = Array.isArray(repo.topics) ? repo.topics.slice(0, 4) : [];
     const topicChips = topics.length
-        ? topics.map(t => `<span onclick="event.stopPropagation(); applyExploreTopic('${escapeHtml(t)}')" style="background: #0f1a2a; color: #93c5fd; padding: 1px 6px; border-radius: 999px; font-size: 0.7rem; cursor: pointer; border: 1px solid #1e2a3a;">#${escapeHtml(t)}</span>`).join(' ')
+        ? topics.map(t => `<span onclick="event.stopPropagation(); applyExploreTopic('${escapeHtml(t)}')" style="background: var(--surface-inset); color: var(--accent-soft); padding: 1px 6px; border-radius: 999px; font-size: 0.7rem; cursor: pointer; border: 1px solid var(--border);">#${escapeHtml(t)}</span>`).join(' ')
         : '';
     return `
-        <div style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: #0f0f0f; border: 1px solid ${isFirst ? '#60a5fa' : '#222'}; border-radius: 8px; margin-bottom: 8px;">
+        <div style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: var(--surface-inset); border: 1px solid ${isFirst ? 'var(--accent)' : 'var(--border)'}; border-radius: 8px; margin-bottom: 8px;">
             <div style="color: ${rankColor}; font-weight: ${rankWeight}; min-width: 32px; text-align: center; font-size: ${isFirst ? '1rem' : '0.85rem'};">#${rank + 1}</div>
             <div style="flex: 1; min-width: 0;">
                 <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 2px;">
-                    <a href="${repo.html_url}" target="_blank" style="color: #93c5fd; text-decoration: none; font-weight: 600;">${escapeHtml(repo.full_name)}</a>
-                    ${repo.language ? `<span style="color: #888; font-size: 0.78rem;">🔧 ${escapeHtml(repo.language)}</span>` : ''}
-                    ${pushedRel ? `<span style="color: #666; font-size: 0.75rem;">⚡ ${pushedRel}</span>` : ''}
+                    <a href="${escapeHtml(repo.html_url)}" target="_blank" style="color: var(--accent-soft); text-decoration: none; font-weight: 600;">${escapeHtml(repo.full_name)}</a>
+                    ${repo.language ? `<span style="color: var(--text-muted); font-size: 0.78rem;">🔧 ${escapeHtml(repo.language)}</span>` : ''}
+                    ${pushedRel ? `<span style="color: var(--text-subtle); font-size: 0.75rem;">⚡ ${pushedRel}</span>` : ''}
                 </div>
-                <div style="color: #bbb; font-size: 0.86rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 4px;">${escapeHtml(repo.description || 'No description')}</div>
+                <div style="color: var(--text-muted); font-size: 0.86rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 4px;">${escapeHtml(repo.description || 'No description')}</div>
                 ${topicChips ? `<div style="display: flex; gap: 4px; flex-wrap: wrap;">${topicChips}</div>` : ''}
             </div>
-            <div style="display: flex; gap: 12px; align-items: center; color: #888; font-size: 0.82rem; flex-shrink: 0;">
+            <div style="display: flex; gap: 12px; align-items: center; color: var(--text-muted); font-size: 0.82rem; flex-shrink: 0;">
                 <span title="Stars">⭐ ${stars}</span>
+                ${renderVelocityChip(repo)}
                 <span title="Forks">🍴 ${forks}</span>
                 <span title="Open issues">🐛 ${openIssues}</span>
             </div>
             <div style="display: flex; gap: 6px; flex-shrink: 0;">
-                <button class="btn btn-sm ${pinned ? 'btn-primary' : 'btn-secondary'}" onclick="togglePin('${repo.full_name}', '${repoJson}'); event.stopPropagation();" title="${pinned ? 'Unpin' : 'Pin to top'}">📌</button>
-                <button class="btn btn-sm" onclick="importGitHubRepo('${repo.html_url}')">📥</button>
+                <button class="btn btn-sm ${pinned ? 'btn-primary' : 'btn-secondary'}" onclick="togglePin(${attrStr(repo.full_name)}, ${attrStr(repoJson)}); event.stopPropagation();" title="${pinned ? 'Unpin' : 'Pin to top'}">📌</button>
+                <button class="btn btn-sm" onclick="importGitHubRepo(${attrStr(repo.html_url)})">📥</button>
             </div>
         </div>
     `;
@@ -2388,11 +2431,11 @@ function renderExploreRepoCard(repo, rank) {
         forks_count: repo.forks_count || 0
     }));
     const cardStyle = isFirst
-        ? 'border: 2px solid #60a5fa; background: linear-gradient(135deg, #1a2540, #1a1a1a); grid-column: span 2;'
+        ? 'border: 2px solid var(--accent); background: linear-gradient(135deg, var(--surface-2), var(--surface)); grid-column: span 2;'
         : '';
     const rankBadge = isFirst
-        ? '<span style="background: #60a5fa; color: #0b1220; font-weight: 700; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; margin-right: 8px;">#1</span>'
-        : `<span style="color: #666; font-weight: 600; margin-right: 8px;">#${rank + 1}</span>`;
+        ? '<span style="background: var(--accent); color: var(--accent-contrast); font-weight: 700; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; margin-right: 8px;">#1</span>'
+        : `<span style="color: var(--text-subtle); font-weight: 600; margin-right: 8px;">#${rank + 1}</span>`;
 
     // Topic chips — clickable to filter the Explore page. GitHub returns up
     // to 20 topics; we show the first 5 to avoid blowing out the card.
@@ -2401,7 +2444,7 @@ function renderExploreRepoCard(repo, rank) {
         <div style="display: flex; gap: 4px; flex-wrap: wrap; margin-top: 8px;">
             ${topics.map(t =>
                 `<span onclick="event.stopPropagation(); applyExploreTopic('${escapeHtml(t)}')"
-                       style="background: #0f1a2a; color: #93c5fd; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; cursor: pointer; border: 1px solid #1e2a3a;"
+                       style="background: var(--surface-inset); color: var(--accent-soft); padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; cursor: pointer; border: 1px solid var(--border);"
                        title="Filter by topic">#${escapeHtml(t)}</span>`
             ).join('')}
         </div>
@@ -2419,22 +2462,23 @@ function renderExploreRepoCard(repo, rank) {
         <div class="github-repo-card project-card" style="${cardStyle}">
             <div class="repo-header" style="display: flex; justify-content: space-between; align-items: start; gap: 8px;">
                 <div style="flex: 1; min-width: 0;">
-                    <div class="repo-name" style="font-weight: 600; color: #93c5fd;">
+                    <div class="repo-name" style="font-weight: 600; color: var(--accent-soft);">
                         ${rankBadge}
-                        <a href="${repo.html_url}" target="_blank" style="color: #93c5fd; text-decoration: none;">${escapeHtml(repo.full_name)}</a>
+                        <a href="${escapeHtml(repo.html_url)}" target="_blank" style="color: var(--accent-soft); text-decoration: none;">${escapeHtml(repo.full_name)}</a>
                     </div>
                 </div>
                 <div style="display: flex; gap: 6px; align-items: center; flex-shrink: 0;">
-                    <button class="btn btn-sm ${pinned ? 'btn-primary' : 'btn-secondary'}" onclick="togglePin('${repo.full_name}', '${repoJson}'); event.stopPropagation();" title="${pinned ? 'Unpin' : 'Pin to top'}">${pinned ? '📌' : '📌'}</button>
+                    <button class="btn btn-sm ${pinned ? 'btn-primary' : 'btn-secondary'}" onclick="togglePin(${attrStr(repo.full_name)}, ${attrStr(repoJson)}); event.stopPropagation();" title="${pinned ? 'Unpin' : 'Pin to top'}">${pinned ? '📌' : '📌'}</button>
                 </div>
             </div>
 
-            <div class="repo-description" style="margin: 8px 0; color: #ccc; line-height: 1.5;">${escapeHtml(repo.description || 'No description')}</div>
+            <div class="repo-description" style="margin: 8px 0; color: var(--text-muted); line-height: 1.5;">${escapeHtml(repo.description || 'No description')}</div>
 
             ${topicChips}
 
-            <div class="repo-meta" style="color: #888; font-size: 0.85rem; display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px;">
+            <div class="repo-meta" style="color: var(--text-muted); font-size: 0.85rem; display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px;">
                 <span title="Stars">⭐ ${stars}</span>
+                ${renderVelocityChip(repo)}
                 <span title="Forks">🍴 ${forks}</span>
                 <span title="Watchers">👁 ${watchers}</span>
                 <span title="Open issues">🐛 ${openIssues}</span>
@@ -2442,14 +2486,14 @@ function renderExploreRepoCard(repo, rank) {
                 ${license ? `<span title="License">📄 ${escapeHtml(license)}</span>` : ''}
             </div>
 
-            <div style="color: #666; font-size: 0.78rem; display: flex; gap: 14px; flex-wrap: wrap; margin-top: 8px;">
+            <div style="color: var(--text-subtle); font-size: 0.78rem; display: flex; gap: 14px; flex-wrap: wrap; margin-top: 8px;">
                 ${createdRel ? `<span title="Created ${repo.created_at}">📅 Created ${createdRel}</span>` : ''}
                 ${pushedRel  ? `<span title="Last push ${repo.pushed_at}">⚡ Last push ${pushedRel}</span>` : ''}
             </div>
 
             <div class="repo-actions" style="margin-top: 12px; display: flex; gap: 8px;">
-                <button class="btn btn-sm" onclick="importGitHubRepo('${repo.html_url}')">📥 Import</button>
-                <a href="${repo.html_url}" target="_blank" class="btn btn-sm btn-secondary">View on GitHub</a>
+                <button class="btn btn-sm" onclick="importGitHubRepo(${attrStr(repo.html_url)})">📥 Import</button>
+                <a href="${escapeHtml(repo.html_url)}" target="_blank" class="btn btn-sm btn-secondary">View on GitHub</a>
             </div>
         </div>
     `;
@@ -2462,6 +2506,25 @@ function applyExploreTopic(topic) {
         input.value = topic;
         loadExplore();
     }
+}
+
+// Star-velocity chip — only renders when the server attached `stars_delta_7d`
+// (or `stars_delta_30d` as a fallback). Velocity is the rate of new stars
+// since our last snapshot, and is THE signal github.com/trending and
+// OSSInsight use to define "trending." Until we've been running long enough
+// to have history for a given repo, the server returns no delta and this
+// chip stays empty. Builds up naturally over the first week of use.
+function renderVelocityChip(repo) {
+    const d7 = repo.stars_delta_7d;
+    if (typeof d7 === 'number' && d7 > 0) {
+        // Bright green pill — high signal.
+        return `<span style="background: #052e16; color: #22c55e; padding: 1px 8px; border-radius: 999px; font-size: 0.78rem; font-weight: 700; border: 1px solid #14532d;" title="New stars in the last 7 days (since we started tracking this repo)">📈 +${d7.toLocaleString()}/7d</span>`;
+    }
+    const d30 = repo.stars_delta_30d;
+    if (typeof d30 === 'number' && d30 > 0 && (d7 === undefined || d7 === null)) {
+        return `<span style="background: var(--surface); color: var(--text-muted); padding: 1px 8px; border-radius: 999px; font-size: 0.78rem;" title="New stars in the last 30 days">📈 +${d30.toLocaleString()}/30d</span>`;
+    }
+    return '';
 }
 
 // Human-readable relative time ("3d ago", "2mo ago"). Used for the new
@@ -2495,20 +2558,20 @@ function renderGitHubRepoCard(repo) {
     return `
         <div class="github-repo-card project-card">
             <div class="repo-header" style="display: flex; justify-content: space-between; align-items: start; gap: 8px;">
-                <div class="repo-name" style="font-weight: 600; color: #93c5fd;">${repo.full_name}</div>
+                <div class="repo-name" style="font-weight: 600; color: var(--accent-soft);">${escapeHtml(repo.full_name)}</div>
                 <div style="display: flex; gap: 6px; align-items: center;">
-                    <button class="btn btn-sm ${pinned ? 'btn-primary' : 'btn-secondary'}" onclick="togglePin('${repo.full_name}', '${repoJson}'); event.stopPropagation();" title="${pinned ? 'Unpin' : 'Pin to top'}">${pinned ? '📌 Pinned' : '📌 Pin'}</button>
-                    <div class="repo-stars" style="color: #888; font-size: 0.9rem;">⭐ ${stars}</div>
+                    <button class="btn btn-sm ${pinned ? 'btn-primary' : 'btn-secondary'}" onclick="togglePin(${attrStr(repo.full_name)}, ${attrStr(repoJson)}); event.stopPropagation();" title="${pinned ? 'Unpin' : 'Pin to top'}">${pinned ? '📌 Pinned' : '📌 Pin'}</button>
+                    <div class="repo-stars" style="color: var(--text-muted); font-size: 0.9rem;">⭐ ${stars}</div>
                 </div>
             </div>
-            <div class="repo-description" style="margin: 8px 0; color: #ccc;">${repo.description || 'No description'}</div>
-            <div class="repo-meta" style="color: #888; font-size: 0.85rem; display: flex; gap: 12px;">
-                ${repo.language ? `<span>🔧 ${repo.language}</span>` : ''}
+            <div class="repo-description" style="margin: 8px 0; color: var(--text-muted);">${escapeHtml(repo.description || 'No description')}</div>
+            <div class="repo-meta" style="color: var(--text-muted); font-size: 0.85rem; display: flex; gap: 12px;">
+                ${repo.language ? `<span>🔧 ${escapeHtml(repo.language)}</span>` : ''}
                 <span>🍴 ${forks} forks</span>
             </div>
             <div class="repo-actions" style="margin-top: 12px; display: flex; gap: 8px;">
-                <button class="btn btn-sm" onclick="importGitHubRepo('${repo.html_url}')">📥 Import</button>
-                <a href="${repo.html_url}" target="_blank" class="btn btn-sm btn-secondary">View on GitHub</a>
+                <button class="btn btn-sm" onclick="importGitHubRepo(${attrStr(repo.html_url)})">📥 Import</button>
+                <a href="${escapeHtml(repo.html_url)}" target="_blank" class="btn btn-sm btn-secondary">View on GitHub</a>
             </div>
         </div>
     `;
@@ -2545,7 +2608,7 @@ async function importGitHubRepo(url) {
             renderBrowseRepos(browseReposCache.user, browseReposCache.repos);
         }
     } catch (error) {
-        alert(`Error: ${error.message}`);
+        showToast(`Error: ${error.message}`, 'error');
     }
 }
 
@@ -2558,7 +2621,7 @@ function copyToClipboard(text, element) {
         element.style.color = '#10b981';
         setTimeout(() => {
             element.textContent = originalText;
-            element.style.color = '#60a5fa';
+            element.style.color = 'var(--accent)';
         }, 2000);
     }).catch(err => {
         alert('Failed to copy: ' + err);
@@ -2592,17 +2655,22 @@ async function loadIssues(state) {
         list.innerHTML = data.issues.map(i => {
             const stateColor = i.state === 'open' ? '#22c55e' : '#8b5cf6';
             const stateIcon = i.state === 'open' ? '🟢' : '🟣';
-            const labels = (i.labels || []).map(l => `<span style="background: #${l.color || '888'}22; color: #${l.color || 'ccc'}; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem;">${l.name}</span>`).join(' ');
+            const labels = (i.labels || []).map(l => {
+                const isHex = /^[0-9a-f]{6}$/i.test(l.color);
+                const bgColor = isHex ? l.color : '888';
+                const textColor = isHex ? l.color : 'ccc';
+                return `<span style="background: #${bgColor}22; color: #${textColor}; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem;">${escapeHtml(l.name)}</span>`;
+            }).join(' ');
             return `
                 <div class="update-item" style="display: flex; justify-content: space-between; align-items: start; gap: 12px;">
                     <div style="flex: 1;">
                         <div class="update-title">
-                            <a href="${i.html_url}" target="_blank" style="color: #93c5fd; text-decoration: none;">
-                                ${stateIcon} #${i.number} · ${i.title}
+                            <a href="${escapeHtml(i.html_url)}" target="_blank" style="color: var(--accent-soft); text-decoration: none;">
+                                ${stateIcon} #${i.number} · ${escapeHtml(i.title)}
                             </a>
                         </div>
-                        <div style="font-size: 0.8rem; color: #888; margin-top: 4px;">
-                            by ${i.user || 'unknown'} · ${formatDate(new Date(i.created_at).getTime() / 1000)} · 💬 ${i.comments}
+                        <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
+                            by ${escapeHtml(i.user || 'unknown')} · ${formatDate(new Date(i.created_at).getTime() / 1000)} · 💬 ${i.comments}
                         </div>
                         ${labels ? `<div style="margin-top: 6px;">${labels}</div>` : ''}
                     </div>
@@ -2610,7 +2678,7 @@ async function loadIssues(state) {
             `;
         }).join('');
     } catch (e) {
-        list.innerHTML = `<div class="empty-state">⚠ ${e.message}</div>`;
+        list.innerHTML = `<div class="empty-state">⚠ ${escapeHtml(e.message)}</div>`;
     }
 }
 
@@ -2636,23 +2704,19 @@ async function loadCommits() {
             <div class="update-item">
                 <div class="update-header">
                     <div class="update-title">
-                        <a href="${c.html_url}" target="_blank" style="color: #93c5fd; text-decoration: none; font-family: monospace;">${c.short}</a>
+                        <a href="${escapeHtml(c.html_url)}" target="_blank" style="color: var(--accent-soft); text-decoration: none; font-family: monospace;">${escapeHtml(c.short)}</a>
                         · ${escapeHtml(c.message)}
                     </div>
                     <div class="update-time">${c.date ? formatDate(new Date(c.date).getTime() / 1000) : ''}</div>
                 </div>
-                <div style="font-size: 0.8rem; color: #888; margin-top: 4px;">
-                    ${c.author_login ? `@${c.author_login}` : c.author || 'unknown'}
+                <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
+                    ${c.author_login ? `@${escapeHtml(c.author_login)}` : escapeHtml(c.author || 'unknown')}
                 </div>
             </div>
         `).join('');
     } catch (e) {
-        list.innerHTML = `<div class="empty-state">⚠ ${e.message}</div>`;
+        list.innerHTML = `<div class="empty-state">⚠ ${escapeHtml(e.message)}</div>`;
     }
-}
-
-function escapeHtml(s) {
-    return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 async function openInTerminal(path) {
@@ -2666,7 +2730,7 @@ async function openInTerminal(path) {
         if (!res.ok) throw new Error(data.error || 'Failed to open terminal');
         if (typeof showToast === 'function') showToast(`Opened terminal in ${path}`);
     } catch (e) {
-        alert(`Error: ${e.message}`);
+        showToast(`Error: ${e.message}`, 'error');
     }
 }
 
@@ -2689,7 +2753,7 @@ async function openInClaudeCode() {
         if (!res.ok) throw new Error(data.error || 'Failed to open Claude Code');
         showToast(`🤖 Claude Code opening in ${currentProject.local_path}`);
     } catch (e) {
-        alert(`Error: ${e.message}`);
+        showToast(`Error: ${e.message}`, 'error');
     }
 }
 
@@ -2711,7 +2775,7 @@ async function openInFolder(path) {
         if (!res.ok) throw new Error(data.error || 'Failed to open folder');
         if (typeof showToast === 'function') showToast(`Opened folder ${path}`);
     } catch (e) {
-        alert(`Error: ${e.message}`);
+        showToast(`Error: ${e.message}`, 'error');
     }
 }
 
@@ -2874,11 +2938,11 @@ function renderNeoPopular() {
             const stars = p.stars || 0;
             const forks = p.forks || 0;
             const cardStyle = isFirst
-                ? 'border: 2px solid #60a5fa; background: linear-gradient(135deg, #1a2540, #1a1a1a); grid-column: span 2;'
+                ? 'border: 2px solid var(--accent); background: linear-gradient(135deg, var(--surface-2), var(--surface)); grid-column: span 2;'
                 : '';
             const rankBadge = isFirst
-                ? '<span style="background: #60a5fa; color: #0b1220; font-weight: 700; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; margin-right: 8px;">#1</span>'
-                : `<span style="color: #666; font-weight: 600; margin-right: 8px;">#${i + 1}</span>`;
+                ? '<span style="background: var(--accent); color: var(--accent-contrast); font-weight: 700; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; margin-right: 8px;">#1</span>'
+                : `<span style="color: var(--text-subtle); font-weight: 600; margin-right: 8px;">#${i + 1}</span>`;
             const localChip = p.local_path
                 ? '<span style="color: #22c55e; font-size: 0.8rem; margin-left: 8px;">📁 cloned</span>'
                 : '';
@@ -2896,7 +2960,7 @@ function renderNeoPopular() {
                         <span><span class="neo-language-dot"></span> ${language}</span>
                         ${stars > 0 ? `<span>⭐ ${stars}</span>` : ''}
                         ${forks > 0 ? `<span>🔱 ${forks}</span>` : ''}
-                        <span style="color: #666; margin-left: auto;">${p.status || ''}</span>
+                        <span style="color: var(--text-subtle); margin-left: auto;">${p.status || ''}</span>
                     </div>
                 </div>
             `;
@@ -2941,15 +3005,25 @@ function renderNeoRepos() {
         
         const stars = project.stars || 0;
         const forks = project.forks || 0;
-        
+
+        // Visibility badge reflects the repo's actual GitHub visibility
+        // (is_private: 1 = private, 0 = public, null = unknown/not a github
+        // repo). Show nothing when there's no linked repo to describe.
+        let visibilityBadge = '';
+        if (project.is_private === 1) {
+            visibilityBadge = '<span class="neo-private-badge">🔒 Private</span>';
+        } else if (project.is_private === 0 || project.repo_url) {
+            visibilityBadge = '<span class="neo-public-badge">Public</span>';
+        }
+
         return `
             <div class="neo-repo-item" style="cursor: pointer;" onclick="if(!event.target.closest('.neo-action-btn,.neo-repo-actions,a,button'))showProject(${project.id})">
                 <div class="neo-repo-header">
                     <div style="display: flex; align-items: center; gap: 8px;">
                         <a href="#" class="neo-repo-name" onclick="event.stopPropagation(); showProject(${project.id}); return false;">
-                            ${project.name}
+                            ${escapeHtml(project.name)}
                         </a>
-                        <span class="neo-public-badge">Public</span>
+                        ${visibilityBadge}
                     </div>
                     ${syncStatus !== 'unknown' ? `
                         <span class="neo-sync-badge ${syncBadgeClass}">
@@ -2959,21 +3033,21 @@ function renderNeoRepos() {
                 </div>
                 
                 <div class="neo-repo-description">
-                    ${project.description || 'No description'}
+                    ${escapeHtml(project.description || 'No description')}
                 </div>
-                
+
                 <div class="neo-repo-meta">
-                    <span><span class="neo-language-dot"></span> ${language}</span>
+                    <span><span class="neo-language-dot"></span> ${escapeHtml(language)}</span>
                     ${stars > 0 ? `<span class="neo-meta-separator">•</span><span>⭐ ${stars}</span>` : ''}
                     ${forks > 0 ? `<span class="neo-meta-separator">•</span><span>🔱 ${forks}</span>` : ''}
-                    ${pathShort ? `<span class="neo-meta-separator">•</span><span>📁 ${pathShort}</span>` : ''}
+                    ${pathShort ? `<span class="neo-meta-separator">•</span><span>📁 ${escapeHtml(pathShort)}</span>` : ''}
                     <span class="neo-meta-separator">•</span>
                     <span>Updated ${updated}</span>
                 </div>
                 
                 ${localPath ? `
                     <div class="neo-repo-actions">
-                        <button class="neo-action-btn" onclick="copyNeoPath('${localPath}')">
+                        <button class="neo-action-btn" onclick="copyNeoPath(${attrStr(localPath)})">
                             📋 Copy cd
                         </button>
                         <button class="neo-action-btn" onclick="checkSingleSync(${project.id})">
@@ -3372,10 +3446,10 @@ function _learnRenderRecommendations() {
         <div class="learn-recommend-card">
             <div class="learn-recommend-icon">${r.tier === 'top' ? '🏅' : '🔌'}</div>
             <div class="learn-recommend-body">
-                <div class="learn-recommend-title">${escapeHtml(r.name)} <span style="color:#666;font-weight:400;font-size:0.85rem;">— ${escapeHtml(r.author)}${r.stars ? ' · ⭐ ' + r.stars : ''}</span></div>
+                <div class="learn-recommend-title">${escapeHtml(r.name)} <span style="color:var(--text-subtle);font-weight:400;font-size:0.85rem;">— ${escapeHtml(r.author)}${r.stars ? ' · ⭐ ' + r.stars : ''}</span></div>
                 <div class="learn-recommend-desc">${escapeHtml(r.blurb)}</div>
-                <div style="margin-top:8px;font-size:0.85rem;color:#888;"><strong>Why:</strong> ${escapeHtml(r.why)}</div>
-                ${r.install?.claudeCode ? `<div style="margin-top:8px;"><strong style="color:#93c5fd;font-size:0.85rem;">Install:</strong> <code style="background:#0f0f0f;padding:2px 6px;border-radius:4px;font-size:0.85rem;">${escapeHtml(r.install.claudeCode)}</code></div>` : ''}
+                <div style="margin-top:8px;font-size:0.85rem;color:var(--text-muted);"><strong>Why:</strong> ${escapeHtml(r.why)}</div>
+                ${r.install?.claudeCode ? `<div style="margin-top:8px;"><strong style="color:var(--accent-soft);font-size:0.85rem;">Install:</strong> <code style="background:var(--surface-inset);padding:2px 6px;border-radius:4px;font-size:0.85rem;">${escapeHtml(r.install.claudeCode)}</code></div>` : ''}
             </div>
             <a href="${r.repo}" target="_blank" class="learn-btn learn-btn-secondary" style="text-decoration:none;display:inline-block;">View on GitHub →</a>
         </div>

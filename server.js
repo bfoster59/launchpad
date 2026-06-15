@@ -4,7 +4,10 @@ const LaunchpadDB = require('./database');
 
 const app = express();
 const PORT = 3020;
-const HOST = '0.0.0.0';
+// Bind to loopback by default — LaunchPad has no auth and exposes endpoints that
+// shell out to git/npm, so it must not be reachable from the LAN. Set HOST=0.0.0.0
+// explicitly (behind a trusted network) only if you accept that risk.
+const HOST = process.env.HOST || '127.0.0.1';
 
 // Initialize database
 const db = new LaunchpadDB();
@@ -35,16 +38,118 @@ function initOctokit() {
     return false;
 }
 
-// Derive the clone base directory (Settings > env > hardcoded default)
+// Derive the clone base directory (Settings > env > portable default).
+// Default lives under the OS home dir so a fresh clone works on any machine;
+// override per-install via the clone_base_dir setting or CLONE_BASE_DIR env.
 function getCloneBaseDir() {
-    return db.getSetting('clone_base_dir') || process.env.CLONE_BASE_DIR || '/home/bfoster';
+    const os = require('os');
+    const path = require('path');
+    return db.getSetting('clone_base_dir') || process.env.CLONE_BASE_DIR || path.join(os.homedir(), 'github');
 }
 
 initOctokit();
 
+// --- Safe process-execution helpers (Gate 3 phase 1: command-injection fix) ---
+// Run git in `cwd` using an argument array — NO shell. Repo paths and refs are
+// passed as literal args, so they can never be parsed as shell metacharacters.
+// Replaces the old `cd "${path}" && git …` exec strings that were injectable via
+// attacker-settable project.local_path / repo_url / name.
+const _execFileAsync = require('util').promisify(require('child_process').execFile);
+function runGit(cwd, args, opts = {}) {
+    return _execFileAsync('git', ['-C', cwd, ...args], {
+        timeout: 15000, windowsHide: true, maxBuffer: 10 * 1024 * 1024, ...opts
+    });
+}
+
+// Validate a user-supplied directory path before handing it to a process.
+// Returns the resolved absolute path, or null if it contains shell
+// metacharacters, doesn't exist, isn't a directory, or escapes the allowlisted
+// clone base (unless it is the local_path of an already-tracked project).
+function resolveSafeDir(requested) {
+    const path = require('path');
+    const fs = require('fs');
+    if (!requested || typeof requested !== 'string') return null;
+    // Reject shell metacharacters, incl. '%' (cmd.exe %VAR% expansion in the
+    // open-terminal launch). '(' ')' are intentionally NOT rejected — they are
+    // common in real Windows paths (e.g. "Program Files (x86)").
+    if (/[`$;&|<>^"'%\n\r]/.test(requested)) return null;
+    let resolved;
+    try { resolved = path.resolve(requested); } catch (e) { return null; }
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) return null;
+    // Windows paths are case-insensitive — normalize before comparing so a
+    // legit project isn't false-rejected over a drive-letter/casing mismatch.
+    const norm = (s) => process.platform === 'win32' ? s.toLowerCase() : s;
+    const base = path.resolve(getCloneBaseDir());
+    const rel = path.relative(norm(base), norm(resolved));
+    if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) return resolved;
+    try {
+        if (db.getAllProjects().some(p => p.local_path && norm(path.resolve(p.local_path)) === norm(resolved))) return resolved;
+    } catch (e) { /* ignore */ }
+    return null;
+}
+
+// --- GitHub call resilience (Gate 3 phase 3b: M4) ---
+// Map an async fn over items with bounded concurrency (no external deps).
+// Replaces Promise.all over a 100-repo list, which fired up to 100 parallel
+// GitHub calls and tripped secondary rate limits.
+async function mapWithConcurrency(items, limit, fn) {
+    const results = new Array(items.length);
+    let next = 0;
+    const worker = async () => {
+        while (next < items.length) {
+            const i = next++;
+            results[i] = await fn(items[i], i);
+        }
+    };
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+    return results;
+}
+
+// True when an Octokit error is a rate-limit (primary or secondary) rather than
+// a genuine 403 permission denial — only those are worth retrying.
+function isRateLimited(e) {
+    if (e.status === 429) return true;
+    if (e.status !== 403) return false;
+    const h = (e.response && e.response.headers) || {};
+    if (h['retry-after']) return true;
+    if (h['x-ratelimit-remaining'] === '0') return true;
+    return /rate limit/i.test(e.message || '');
+}
+
+// Retry an Octokit call on rate-limit or 5xx with backoff (honors retry-after).
+async function githubRetry(fn, { tries = 3, baseDelayMs = 1000 } = {}) {
+    let lastErr;
+    for (let attempt = 0; attempt < tries; attempt++) {
+        try {
+            return await fn();
+        } catch (e) {
+            lastErr = e;
+            const retriable = isRateLimited(e) || (e.status >= 500 && e.status < 600);
+            if (!retriable || attempt === tries - 1) throw e;
+            const retryAfter = Number(e.response && e.response.headers && e.response.headers['retry-after']);
+            const delay = Number.isFinite(retryAfter) && retryAfter > 0
+                ? Math.min(retryAfter * 1000, 30000) // clamp — don't let an upstream retry-after hang the request
+                : baseDelayMs * Math.pow(2, attempt);
+            await new Promise(r => setTimeout(r, delay));
+        }
+    }
+    throw lastErr;
+}
+
 // Middleware
 app.use(express.static('public'));
 app.use(express.json({ limit: '10mb' })); // Increase limit for bulk imports
+
+// Validate :id route params once, globally — reject non-positive-integers with
+// a JSON 400 instead of letting NaN/garbage reach better-sqlite3 (which throws a
+// 500 on a NaN bind) or silently matching nothing.
+app.param('id', (req, res, next, val) => {
+    const n = Number(val);
+    if (!Number.isInteger(n) || n < 1) {
+        return res.status(400).json({ error: 'Invalid id' });
+    }
+    next();
+});
 
 // ========== PROJECT ENDPOINTS ==========
 
@@ -342,6 +447,30 @@ app.get('/api/github/explore', async (req, res) => {
             per_page: 50
         });
 
+        // Snapshot every returned repo's star count for star-velocity tracking.
+        // The DB throttle (6h minimum gap) prevents bloat when the user reloads
+        // Explore repeatedly. Then attach Δ7d to each repo when we have enough
+        // history to compute it — on the first day of running this, almost
+        // everything will be null; over a week the page becomes meaningfully
+        // velocity-aware.
+        try {
+            db.recordStarSnapshotsBulk(
+                (data.items || []).map(r => ({
+                    repo_full_name: r.full_name,
+                    stargazers_count: r.stargazers_count || 0
+                }))
+            );
+            (data.items || []).forEach(r => {
+                const d7 = db.getStarDelta(r.full_name, 7, r.stargazers_count || 0);
+                const d30 = db.getStarDelta(r.full_name, 30, r.stargazers_count || 0);
+                if (d7) r.stars_delta_7d = d7.delta;
+                if (d30) r.stars_delta_30d = d30.delta;
+            });
+        } catch (e) {
+            // Velocity is a nice-to-have — don't fail the request if it errors.
+            console.error('[explore] velocity tracking failed:', e.message);
+        }
+
         res.json(data);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -355,9 +484,6 @@ app.get('/api/github/explore', async (req, res) => {
 // shell commands or DB-update rules. SAFE — read-only against the network
 // (git fetch) and only writes last_commit_at + (conservatively) auto-bumps.
 async function runSyncCheck(project) {
-    const { exec } = require('child_process');
-    const util = require('util');
-    const execPromise = util.promisify(exec);
     const fs = require('fs');
 
     if (!project.repo_url) return { status: 'no_repo', message: 'No GitHub repository linked' };
@@ -365,17 +491,25 @@ async function runSyncCheck(project) {
         return { status: 'not_cloned', message: 'Repository not cloned locally' };
     }
 
-    try {
-        await execPromise(`cd "${project.local_path}" && git fetch origin 2>&1`);
+    const cwd = project.local_path;
+    // Error-tolerant git: no upstream / detached HEAD reads as "" instead of
+    // throwing (mirrors the old `… || echo ""`).
+    const gitSoft = (args) => runGit(cwd, args).then(r => r.stdout).catch(() => '');
 
-        const { stdout: statusOut } = await execPromise(`cd "${project.local_path}" && git status --porcelain`);
+    try {
+        await runGit(cwd, ['fetch', 'origin']);
+
+        const { stdout: statusOut } = await runGit(cwd, ['status', '--porcelain']);
         const hasUncommitted = statusOut.trim().length > 0;
 
-        const { stdout: unpushedOut } = await execPromise(`cd "${project.local_path}" && git log origin/$(git rev-parse --abbrev-ref HEAD)..HEAD --oneline 2>&1 || echo ""`);
-        const hasUnpushed = unpushedOut.trim().length > 0 && !unpushedOut.includes('fatal');
+        const { stdout: branchOut } = await runGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
+        const currentBranch = branchOut.trim();
 
-        const { stdout: behindOut } = await execPromise(`cd "${project.local_path}" && git log HEAD..origin/$(git rev-parse --abbrev-ref HEAD) --pretty=format:"%h|%an|%s" 2>&1 || echo ""`);
-        const isBehind = behindOut.trim().length > 0 && !behindOut.includes('fatal');
+        const unpushedOut = await gitSoft(['log', `origin/${currentBranch}..HEAD`, '--oneline']);
+        const hasUnpushed = unpushedOut.trim().length > 0;
+
+        const behindOut = await gitSoft(['log', `HEAD..origin/${currentBranch}`, '--pretty=format:%h|%an|%s']);
+        const isBehind = behindOut.trim().length > 0;
         const incomingCommits = isBehind
             ? behindOut.trim().split('\n').slice(0, 20).map(line => {
                 const [hash, author, ...msgParts] = line.split('|');
@@ -383,33 +517,38 @@ async function runSyncCheck(project) {
               })
             : [];
 
-        const { stdout: branchOut } = await execPromise(`cd "${project.local_path}" && git rev-parse --abbrev-ref HEAD`);
-        const currentBranch = branchOut.trim();
-
         let defaultBranch = null;
         try {
-            const { stdout: defOut } = await execPromise(`cd "${project.local_path}" && git symbolic-ref --short refs/remotes/origin/HEAD 2>&1`);
+            const { stdout: defOut } = await runGit(cwd, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']);
             defaultBranch = defOut.trim().replace(/^origin\//, '') || null;
         } catch (e) { /* fall through to remote show */ }
         if (!defaultBranch) {
             try {
-                const { stdout: rs } = await execPromise(`cd "${project.local_path}" && git remote show origin 2>&1`);
+                const { stdout: rs } = await runGit(cwd, ['remote', 'show', 'origin']);
                 const m = /HEAD branch:\s*(\S+)/.exec(rs);
                 if (m && m[1] !== '(unknown)') defaultBranch = m[1];
             } catch (e) { /* leave null — UI suppresses warning when null */ }
         }
 
-        const { stdout: lastCommitOut } = await execPromise(`cd "${project.local_path}" && git log -1 --format="%h|%s|%ar|%at"`);
+        const { stdout: lastCommitOut } = await runGit(cwd, ['log', '-1', '--format=%h|%s|%ar|%at']);
         const [hash, message, timeAgo, atUnixStr] = lastCommitOut.trim().split('|');
         const lastCommitAt = parseInt(atUnixStr) || null;
 
         if (lastCommitAt) {
-            const updates = { last_commit_at: lastCommitAt };
+            // This runs on every sync-status GET and the boot sweep, so it must
+            // be idempotent: only write when something actually changed, and only
+            // log the auto-bump the one time the status flips (not every sweep).
+            const updates = {};
+            if (lastCommitAt !== project.last_commit_at) {
+                updates.last_commit_at = lastCommitAt;
+            }
             const ageDays = (Date.now() / 1000 - lastCommitAt) / 86400;
             if (project.status === 'idea' && ageDays <= 7) {
                 updates.status = 'building';
             }
-            db.updateProject(project.id, updates);
+            if (Object.keys(updates).length > 0) {
+                db.updateProject(project.id, updates);
+            }
             if (updates.status) {
                 db.addUpdate({
                     project_id: project.id,
@@ -465,6 +604,31 @@ async function runSyncSweep(projects, concurrency = 4) {
     return results;
 }
 
+// Backfill repo visibility (public/private) onto github-sourced projects.
+// Early imports didn't persist visibility, so the UI showed everything as
+// "Public". One authenticated listForAuthenticatedUser call returns every
+// repo with its `private` flag; we match by repo_url and update. Requires a
+// PAT (private repos are invisible to an anonymous client anyway). Returns
+// the number of projects updated. Safe to run repeatedly — keeps visibility
+// accurate if a repo is later flipped public/private.
+async function backfillVisibility() {
+    if (!octokit) return 0;
+    const repos = await octokit.paginate(octokit.repos.listForAuthenticatedUser, {
+        per_page: 100, affiliation: 'owner,collaborator,organization_member'
+    });
+    const byUrl = new Map(repos.map(r => [r.html_url, r.private ? 1 : 0]));
+    let updated = 0;
+    for (const p of db.getAllProjects()) {
+        if (!p.repo_url || !byUrl.has(p.repo_url)) continue;
+        const v = byUrl.get(p.repo_url);
+        if (p.is_private !== v) {
+            db.updateProject(p.id, { is_private: v });
+            updated++;
+        }
+    }
+    return updated;
+}
+
 // Check GitHub sync status
 app.get('/api/projects/:id/sync-status', async (req, res) => {
     try {
@@ -505,9 +669,6 @@ app.get('/api/local-clone-detect', async (req, res) => {
     try {
         const fs = require('fs');
         const path = require('path');
-        const { exec } = require('child_process');
-        const util = require('util');
-        const execPromise = util.promisify(exec);
 
         const baseDir = getCloneBaseDir();
         const all = db.getAllProjects();
@@ -538,7 +699,7 @@ app.get('/api/local-clone-detect', async (req, res) => {
             // Cheap dirty check — no fetch, just local working-tree state.
             let dirty = false;
             try {
-                const { stdout } = await execPromise(`git -C "${candidate}" status --porcelain`, { timeout: 3000 });
+                const { stdout } = await runGit(candidate, ['status', '--porcelain'], { timeout: 3000 });
                 dirty = stdout.trim().length > 0;
             } catch (e) { /* leave dirty = false */ }
 
@@ -712,10 +873,12 @@ function getTerminalCommand(cwd, runCommand) {
 app.post('/api/util/open-terminal', (req, res) => {
     try {
         const { spawn } = require('child_process');
-        const fs = require('fs');
-        const cwd = req.body.path;
-        if (!cwd || !fs.existsSync(cwd)) {
-            return res.status(400).json({ error: 'Path not found' });
+        // cwd is interpolated into a shell command (Windows terminal launch), so
+        // it must pass strict validation: no shell metacharacters, real dir,
+        // inside the allowlisted base or a tracked project.
+        const cwd = resolveSafeDir(req.body.path);
+        if (!cwd) {
+            return res.status(400).json({ error: 'Path not found or not an allowed project directory' });
         }
         // Optional command that the terminal should run after cd-ing.
         // Whitelist keeps arbitrary shell strings from being injected.
@@ -736,10 +899,9 @@ app.post('/api/util/open-terminal', (req, res) => {
 app.post('/api/util/open-folder', (req, res) => {
     try {
         const { spawn } = require('child_process');
-        const fs = require('fs');
-        const cwd = req.body.path;
-        if (!cwd || !fs.existsSync(cwd)) {
-            return res.status(400).json({ error: 'Path not found' });
+        const cwd = resolveSafeDir(req.body.path);
+        if (!cwd) {
+            return res.status(400).json({ error: 'Path not found or not an allowed project directory' });
         }
         // Use the OS file-manager opener with path as an argument — no shell
         // string interpolation beyond the single path arg.
@@ -1096,9 +1258,6 @@ function statusLabel(xy) {
 
 app.get('/api/projects/:id/staged-preview', async (req, res) => {
     try {
-        const { exec } = require('child_process');
-        const util = require('util');
-        const execPromise = util.promisify(exec);
         const fs = require('fs');
         const path = require('path');
 
@@ -1109,12 +1268,11 @@ app.get('/api/projects/:id/staged-preview', async (req, res) => {
         }
 
         const cwd = project.local_path;
-        const shq = (s) => `"${s.replace(/"/g, '\\"')}"`;
 
         // git status --porcelain shows ALL changes (staged, unstaged, untracked).
         // Since the commit modal does git add -A first, every line here will end
         // up staged. We surface them all so the user sees what's about to land.
-        const { stdout: porcelain } = await execPromise(`cd ${shq(cwd)} && git status --porcelain`);
+        const { stdout: porcelain } = await runGit(cwd, ['status', '--porcelain']);
         const lines = porcelain.split('\n').filter(l => l.trim().length > 0);
 
         const files = [];
@@ -1174,9 +1332,6 @@ app.get('/api/projects/:id/staged-preview', async (req, res) => {
 // Commit + optionally push the project's local clone
 app.post('/api/projects/:id/commit', async (req, res) => {
     try {
-        const { exec } = require('child_process');
-        const util = require('util');
-        const execPromise = util.promisify(exec);
         const fs = require('fs');
 
         const project = db.getProject(parseInt(req.params.id));
@@ -1194,18 +1349,17 @@ app.post('/api/projects/:id/commit', async (req, res) => {
         }
 
         const cwd = project.local_path;
-        const shq = (s) => `"${s.replace(/"/g, '\\"')}"`;
         const results = {};
 
         if (addAll) {
             // Only commit when there's something staged
             try {
-                await execPromise(`cd ${shq(cwd)} && git add -A`);
-                const { stdout: statusOut } = await execPromise(`cd ${shq(cwd)} && git status --porcelain`);
+                await runGit(cwd, ['add', '-A']);
+                const { stdout: statusOut } = await runGit(cwd, ['status', '--porcelain']);
                 if (!statusOut.trim()) {
                     results.commit = { skipped: true, reason: 'nothing to commit' };
                 } else {
-                    const { stdout: commitOut } = await execPromise(`cd ${shq(cwd)} && git commit -m ${shq(message)}`);
+                    const { stdout: commitOut } = await runGit(cwd, ['commit', '-m', message]);
                     results.commit = { ok: true, output: commitOut.trim() };
                     db.addUpdate({
                         project_id: project.id,
@@ -1227,7 +1381,7 @@ app.post('/api/projects/:id/commit', async (req, res) => {
 
         if (push) {
             try {
-                const { stdout, stderr } = await execPromise(`cd ${shq(cwd)} && git push`);
+                const { stdout, stderr } = await runGit(cwd, ['push']);
                 results.push = { ok: true, output: (stdout + stderr).trim() };
             } catch (e) {
                 results.push = { ok: false, error: (e.stderr || e.message).trim() };
@@ -1243,9 +1397,6 @@ app.post('/api/projects/:id/commit', async (req, res) => {
 // Pull (fast-forward only) to catch up a project behind origin
 app.post('/api/projects/:id/pull', async (req, res) => {
     try {
-        const { exec } = require('child_process');
-        const util = require('util');
-        const execPromise = util.promisify(exec);
         const fs = require('fs');
 
         const project = db.getProject(parseInt(req.params.id));
@@ -1256,7 +1407,7 @@ app.post('/api/projects/:id/pull', async (req, res) => {
 
         const cwd = project.local_path;
         try {
-            const { stdout, stderr } = await execPromise(`cd "${cwd}" && git pull --ff-only`);
+            const { stdout, stderr } = await runGit(cwd, ['pull', '--ff-only']);
             res.json({ success: true, output: (stdout + stderr).trim() });
         } catch (e) {
             res.status(409).json({
@@ -1272,9 +1423,6 @@ app.post('/api/projects/:id/pull', async (req, res) => {
 
 app.post('/api/projects/:id/clone', async (req, res) => {
     try {
-        const { exec } = require('child_process');
-        const util = require('util');
-        const execPromise = util.promisify(exec);
         const path = require('path');
         
         const project = db.getProject(parseInt(req.params.id));
@@ -1286,11 +1434,17 @@ app.post('/api/projects/:id/clone', async (req, res) => {
             return res.status(400).json({ error: 'Project has no repository URL' });
         }
         
-        // Determine target directory — Settings > env > default '/home/bfoster'.
-        // On Windows '/home/bfoster' resolves to C:\home\bfoster, mirroring Beelink layout.
+        // Determine target directory — Settings > env > portable default
+        // (~/github via os.homedir()). See getCloneBaseDir().
         const baseDir = getCloneBaseDir();
         const targetDir = path.join(baseDir, project.name);
-        
+
+        // Guard against a project name like '../../x' escaping the clone base.
+        const relToBase = path.relative(path.resolve(baseDir), path.resolve(targetDir));
+        if (relToBase.startsWith('..') || path.isAbsolute(relToBase)) {
+            return res.status(400).json({ error: 'Invalid project name — clone target escapes the base directory' });
+        }
+
         // Check if already cloned
         const fs = require('fs');
         if (fs.existsSync(targetDir)) {
@@ -1305,7 +1459,9 @@ app.post('/api/projects/:id/clone', async (req, res) => {
         fs.mkdirSync(repoDir, { recursive: true });
 
         try {
-            await execPromise(`git clone "${project.repo_url}" "${targetDir}"`);
+            // '--' ends option parsing so a repo_url like '--upload-pack=…' can't
+            // be interpreted by git clone as a flag (argument injection).
+            await _execFileAsync('git', ['clone', '--', project.repo_url, targetDir], { timeout: 300000, windowsHide: true });
         } catch (cloneErr) {
             const msg = (cloneErr.stderr || cloneErr.message || '').trim();
             if (/authentication failed|could not read username|terminal prompts disabled/i.test(msg)) {
@@ -1430,17 +1586,19 @@ app.get('/api/github/repos', async (req, res) => {
             per_page: 100
         });
         
-        // Enrich repos with commit activity
-        const enrichedRepos = await Promise.all(
-            repos.map(async (repo) => {
+        // Enrich repos with commit activity. Bounded concurrency (5) + retry so
+        // a 100-repo account doesn't fire 100 parallel calls and trip GitHub's
+        // secondary rate limit (which previously mislabeled every repo 'idea').
+        const enrichedRepos = await mapWithConcurrency(repos, 5,
+            async (repo) => {
                 try {
                     // Get latest commit date
-                    const { data: commits } = await octokit.repos.listCommits({
+                    const { data: commits } = await githubRetry(() => octokit.repos.listCommits({
                         owner: repo.owner.login,
                         repo: repo.name,
                         per_page: 1
-                    });
-                    
+                    }));
+
                     const lastCommit = commits[0]?.commit?.author?.date;
                     const daysSinceCommit = lastCommit 
                         ? Math.floor((Date.now() - new Date(lastCommit)) / (1000 * 60 * 60 * 24))
@@ -1469,9 +1627,9 @@ app.get('/api/github/repos', async (req, res) => {
                         inferredStatus: 'idea'
                     };
                 }
-            })
+            }
         );
-        
+
         res.json({
             user: user.login,
             repos: enrichedRepos
@@ -1481,7 +1639,8 @@ app.get('/api/github/repos', async (req, res) => {
     }
 });
 
-// Import a single repo by URL (public repos, no auth needed)
+// Import a single repo by URL. Uses the authenticated client when a PAT is
+// stored (so private repos resolve), else an anonymous client for public repos.
 app.post('/api/github/import-url', async (req, res) => {
     try {
         const { url } = req.body;
@@ -1534,6 +1693,7 @@ app.post('/api/github/import-url', async (req, res) => {
             repo_url: repoData.html_url,
             live_url: repoData.homepage || null,
             source: 'github',
+            is_private: repoData.private ? 1 : 0,
             readme
         });
         
@@ -1577,7 +1737,8 @@ app.post('/api/github/import', async (req, res) => {
                 tech_stack: repoData.language,
                 repo_url: repoData.html_url,
                 live_url: repoData.homepage || null,
-                source: 'github'
+                source: 'github',
+                is_private: repoData.private ? 1 : 0
             });
             
             // Add initial update
@@ -1751,11 +1912,30 @@ app.post('/api/learn/reset', (req, res) => {
     }
 });
 
-// Start server
+// JSON 404 for unmatched /api routes — without this, a typo'd API path falls
+// through to express.static and returns an HTML "Cannot GET", breaking clients
+// that expect JSON.
+app.use('/api', (req, res) => {
+    res.status(404).json({ error: 'Not found' });
+});
+
+// Central error handler. Express 5 forwards rejected async handlers here; this
+// returns JSON and keeps stack traces out of the HTTP response. Must keep all
+// four args (err, req, res, next) for Express to treat it as an error handler.
+app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
+    console.error('Unhandled error:', err);
+    res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
+});
+
+// Start the HTTP server only when run directly (`node server.js`), not when this
+// module is required by the test suite.
+if (require.main === module) {
 app.listen(PORT, HOST, () => {
     console.log(`\n🚀 LaunchPad - Entrepreneur's Project Tracker`);
-    console.log(`   Local:   http://localhost:${PORT}`);
-    console.log(`   Network: http://192.168.5.102:${PORT}`);
+    console.log(`   Local:   http://localhost:${PORT}  (bound to ${HOST})`);
+    if (HOST !== '127.0.0.1' && HOST !== 'localhost') {
+        console.log(`   ⚠  Bound to ${HOST} — reachable beyond this machine and there is NO auth.`);
+    }
     console.log(`\n📊 Ready to track your empire\n`);
 
     // T1.6 — boot-time sync sweep. Defer 2s so the server is fully responsive
@@ -1784,11 +1964,30 @@ app.listen(PORT, HOST, () => {
             console.error('[boot-sweep] schedule failed:', e.message);
         }
     }, 2000);
+
+    // Visibility backfill — fixes already-imported repos that predate
+    // visibility tracking (one GitHub API call, matched by repo_url).
+    setTimeout(() => {
+        backfillVisibility()
+            .then(n => { if (n > 0) console.log(`[visibility-backfill] updated ${n} project(s)`); })
+            .catch(err => console.error('[visibility-backfill] failed:', err.message));
+    }, 2500);
 });
 
-// Graceful shutdown
-process.on('SIGINT', () => {
-    console.log('\n\n👋 Shutting down...');
+// Graceful shutdown — checkpoint + close the DB on every termination path, not
+// just Ctrl-C, so the WAL is truncated instead of left multi-MB on disk.
+let shuttingDown = false;
+function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`\n\n👋 Shutting down (${signal})...`);
     db.close();
     process.exit(0);
-});
+}
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+// Last-resort net for any other exit path; db.close() is idempotent.
+process.on('exit', () => db.close());
+}
+
+module.exports = app;

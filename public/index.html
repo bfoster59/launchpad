@@ -4,7 +4,19 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LaunchPad - Project Tracker</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="styles.css">
+    <script>
+      // Apply the saved/OS theme before first paint (no flash). Minimal,
+      // self-contained copy of theme.js's resolution; theme.js wires the toggle.
+      (function () {
+        try {
+          var c = localStorage.getItem('launchpad-theme') || 'auto';
+          var dark = (c === 'dark') || (c !== 'light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+        } catch (e) {}
+      })();
+    </script>
 </head>
 <body>
     <div class="header">
@@ -12,10 +24,13 @@
             <h1>🚀 LaunchPad</h1>
             <div class="subtitle">Entrepreneur's Project Tracker & GitHub Discovery</div>
         </div>
-        <div class="stats-bar" id="statsBar">
-            <div class="stat"><div class="stat-value">-</div><div>Total</div></div>
-            <div class="stat"><div class="stat-value">-</div><div>Building</div></div>
-            <div class="stat"><div class="stat-value">-</div><div>Launched</div></div>
+        <div class="header-right">
+            <button id="themeToggle" class="theme-toggle" type="button" aria-label="Theme: auto" title="Theme: auto">🖥️</button>
+            <div class="stats-bar" id="statsBar">
+                <div class="stat"><div class="stat-value">-</div><div>Total</div></div>
+                <div class="stat"><div class="stat-value">-</div><div>Building</div></div>
+                <div class="stat"><div class="stat-value">-</div><div>Launched</div></div>
+            </div>
         </div>
     </div>
 
@@ -76,15 +91,15 @@
             <div class="section-header" style="margin-bottom: 20px;">
                 <h2 style="font-size: 1.3rem;">📁 Repositories</h2>
                 <div style="display: flex; gap: 12px; align-items: center;">
-                    <div class="view-toggle" style="display: flex; gap: 2px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; padding: 2px;">
+                    <div class="view-toggle">
                         <button id="neoViewCards" class="view-toggle-btn active" onclick="setGithubView('cards')" title="Card grid (click any card)">🔲 Cards</button>
                         <button id="neoViewRows" class="view-toggle-btn" onclick="setGithubView('rows')" title="Detail rows with sync status">☰ Rows</button>
                     </div>
                     <input type="text" id="neoSearchInput" placeholder="Find a repository…"
-                           style="padding: 8px 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; width: 250px; font-size: 0.9rem;"
+                           style="padding: 8px 12px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; color: var(--text); width: 250px; font-size: 0.9rem;"
                            oninput="filterNeoRepos()">
                     <select id="neoFilterSync" onchange="filterNeoRepos()"
-                            style="padding: 8px 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem;">
+                            style="padding: 8px 12px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.9rem;">
                         <option value="all">Sync: All</option>
                         <option value="synced">✓ Synced</option>
                         <option value="ahead">⚠️ Ahead</option>
@@ -104,11 +119,11 @@
 
         <!-- Bulk Import Modal -->
         <div id="bulkImportModal" class="modal-overlay" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; overflow-y: auto; padding: 40px;">
-            <div style="background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 32px; max-width: 700px; margin: 0 auto;">
-                <h2 style="margin-bottom: 24px; color: #fff;">Import from GitHub</h2>
+            <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 32px; max-width: 700px; margin: 0 auto;">
+                <h2 style="margin-bottom: 24px; color: var(--text);">Import from GitHub</h2>
                 
                 <!-- Tab Navigation -->
-                <div style="display: flex; gap: 4px; margin-bottom: 24px; border-bottom: 2px solid #333;">
+                <div style="display: flex; gap: 4px; margin-bottom: 24px; border-bottom: 2px solid var(--border);">
                     <button id="importBrowseTab" class="import-tab active" onclick="showImportTab('browse')">Browse GitHub</button>
                     <button id="importUrlTab" class="import-tab" onclick="showImportTab('url')">Import by URL</button>
                     <button id="importBulkTab" class="import-tab" onclick="showImportTab('bulk')">Bulk Import</button>
@@ -116,17 +131,17 @@
 
                 <!-- Browse GitHub — your own account, single-click import -->
                 <div id="importBrowseSection">
-                    <p style="color: #888; margin-bottom: 12px;">
+                    <p style="color: var(--text-muted); margin-bottom: 12px;">
                         Your GitHub repositories — click any one to import it.
-                        <span id="browseUserLabel" style="color: #60a5fa; margin-left: 8px;"></span>
+                        <span id="browseUserLabel" style="color: var(--accent); margin-left: 8px;"></span>
                     </p>
                     <!-- Filters -->
                     <div style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center;">
                         <input type="text" id="browseSearch" placeholder="Find a repository…"
                                oninput="renderBrowseFromCache()"
-                               style="flex: 1; padding: 8px 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem;">
+                               style="flex: 1; padding: 8px 12px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.9rem;">
                         <select id="browseStatusFilter" onchange="renderBrowseFromCache()"
-                                style="padding: 8px 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem;">
+                                style="padding: 8px 12px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.9rem;">
                             <option value="all">Status: All</option>
                             <option value="new">🟢 NEW only</option>
                             <option value="imported">All imported</option>
@@ -150,21 +165,21 @@
 
                 <!-- Import by URL — keyword search OR hand-typed URL -->
                 <div id="importUrlSection" style="display: none;">
-                    <p style="color: #888; margin-bottom: 16px;">
+                    <p style="color: var(--text-muted); margin-bottom: 16px;">
                         Search GitHub by keyword, or paste a repository URL directly (no token required for public repos).
                     </p>
                     <div style="margin-bottom: 16px;">
-                        <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">🔍 Search GitHub</label>
+                        <label style="display: block; margin-bottom: 8px; color: var(--text);">🔍 Search GitHub</label>
                         <input type="text" id="importSearchQuery"
                                placeholder="e.g. nextjs starter, react dashboard"
                                oninput="onImportSearchInput()"
                                onkeydown="if(event.key==='Enter'){event.preventDefault();runImportSearch();}"
-                               style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
-                        <div id="importSearchResults" style="margin-top: 8px; max-height: 260px; overflow-y: auto; display: none; background: #0f0f0f; border: 1px solid #333; border-radius: 8px;"></div>
+                               style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
+                        <div id="importSearchResults" style="margin-top: 8px; max-height: 260px; overflow-y: auto; display: none; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px;"></div>
                     </div>
                     <div style="margin-bottom: 16px;">
-                        <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">GitHub Repository URL</label>
-                        <input type="text" id="importUrl" placeholder="https://github.com/username/repo" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                        <label style="display: block; margin-bottom: 8px; color: var(--text);">GitHub Repository URL</label>
+                        <input type="text" id="importUrl" placeholder="https://github.com/username/repo" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
                     </div>
                     <div style="display: flex; gap: 12px;">
                         <button class="btn btn-primary" onclick="importByUrl()">Import</button>
@@ -175,13 +190,13 @@
 
                 <!-- Bulk Import -->
                 <div id="importBulkSection" style="display: none;">
-                    <p style="color: #888; margin-bottom: 16px;">
+                    <p style="color: var(--text-muted); margin-bottom: 16px;">
                         Import multiple repos from your GitHub account
-                        <a href="https://github.com/settings/tokens/new?scopes=repo" target="_blank" style="color: #60a5fa;">Create token</a>
+                        <a href="https://github.com/settings/tokens/new?scopes=repo" target="_blank" style="color: var(--accent);">Create token</a>
                     </p>
                     <div style="margin-bottom: 16px;">
-                        <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">GitHub Personal Access Token</label>
-                        <input type="password" id="githubToken" placeholder="ghp_xxxxxxxxxxxx" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                        <label style="display: block; margin-bottom: 8px; color: var(--text);">GitHub Personal Access Token</label>
+                        <input type="password" id="githubToken" placeholder="ghp_xxxxxxxxxxxx" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
                     </div>
                     <div style="display: flex; gap: 12px; margin-bottom: 24px;">
                         <button class="btn btn-primary" onclick="loadGitHubRepos()">Load My Repos</button>
@@ -195,17 +210,17 @@
                         <div style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center;">
                             <input type="text" id="bulkSearch" placeholder="Find a repository…"
                                    oninput="renderGitHubReposList()"
-                                   style="flex: 1; padding: 8px 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem;">
+                                   style="flex: 1; padding: 8px 12px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.9rem;">
                             <select id="bulkStatusFilter" onchange="renderGitHubReposList()"
-                                    style="padding: 8px 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem;">
+                                    style="padding: 8px 12px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.9rem;">
                                 <option value="all">Show: All</option>
                                 <option value="new" selected>Not yet imported</option>
                                 <option value="imported">Already imported</option>
                             </select>
                         </div>
-                        <div style="margin-bottom: 16px; padding: 12px; background: #0f0f0f; border-radius: 8px;">
+                        <div style="margin-bottom: 16px; padding: 12px; background: var(--surface-inset); border-radius: 8px;">
                             <div style="display: flex; justify-content: space-between; align-items: center;">
-                                <div style="color: #e0e0e0;"><span id="repoCount">0</span> repositories shown</div>
+                                <div style="color: var(--text);"><span id="repoCount">0</span> repositories shown</div>
                                 <div style="display: flex; gap: 8px;">
                                     <button class="btn btn-sm btn-secondary" onclick="selectAllRepos()">Select All</button>
                                     <button class="btn btn-sm btn-primary" onclick="importSelectedRepos()">Import Selected</button>
@@ -226,7 +241,7 @@
             <h2>🔍 Explore GitHub</h2>
             <div style="display: flex; gap: 8px; align-items: center;">
                 <input type="text" id="searchInput" placeholder="Search GitHub (e.g. nextjs starter)"
-                       style="padding: 8px 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; width: 280px;"
+                       style="padding: 8px 12px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; color: var(--text); width: 280px;"
                        onkeypress="if(event.key==='Enter') searchGitHub()">
                 <button class="btn btn-primary" onclick="searchGitHub()">Search</button>
             </div>
@@ -235,10 +250,10 @@
         <!-- Filters row — applies across all Top 5 tabs. Topic/User use HTML5
              datalist so users can either pick from suggestions or type their
              own value. Suggestion lists live below. -->
-        <div style="display: flex; gap: 12px; align-items: center; margin-top: 16px; flex-wrap: wrap; padding: 12px; background: #0f0f0f; border: 1px solid #222; border-radius: 8px;">
-            <span style="color: #888; font-size: 0.85rem;">Filters:</span>
+        <div style="display: flex; gap: 12px; align-items: center; margin-top: 16px; flex-wrap: wrap; padding: 12px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px;">
+            <span style="color: var(--text-muted); font-size: 0.85rem;">Filters:</span>
 
-            <select id="discoverLanguage" onchange="loadExplore()" style="padding: 6px 10px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem;">
+            <select id="discoverLanguage" onchange="loadExplore()" style="padding: 6px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.9rem;">
                 <option value="">Any language</option>
                 <option value="TypeScript">TypeScript</option>
                 <option value="JavaScript">JavaScript</option>
@@ -252,7 +267,7 @@
 
             <input type="text" id="exploreTopic" list="topicChoices" placeholder="Topic (e.g. react, ai)"
                    onchange="loadExplore()"
-                   style="padding: 6px 10px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem; width: 180px;">
+                   style="padding: 6px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.9rem; width: 180px;">
             <datalist id="topicChoices">
                 <option value="ai">
                 <option value="machine-learning">
@@ -287,7 +302,7 @@
 
             <input type="text" id="exploreUser" list="userChoices" placeholder="User / org (e.g. vercel)"
                    onchange="loadExplore()"
-                   style="padding: 6px 10px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem; width: 180px;">
+                   style="padding: 6px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.9rem; width: 180px;">
             <datalist id="userChoices">
                 <option value="vercel">
                 <option value="microsoft">
@@ -312,7 +327,7 @@
                 <option value="bfoster59">
             </datalist>
 
-            <select id="exploreRange" onchange="loadExplore()" style="padding: 6px 10px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem;">
+            <select id="exploreRange" onchange="loadExplore()" style="padding: 6px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.9rem;">
                 <option value="daily">Today</option>
                 <option value="weekly">This week</option>
                 <option value="monthly" selected>This month</option>
@@ -320,7 +335,7 @@
             </select>
 
             <select id="exploreSpokenLang" onchange="loadExplore()" title="Filter repos by description language"
-                    style="padding: 6px 10px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.9rem;">
+                    style="padding: 6px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.9rem;">
                 <option value="english" selected>🇺🇸 English only</option>
                 <option value="any">🌐 Any language</option>
                 <option value="chinese">🇨🇳 Chinese</option>
@@ -353,7 +368,7 @@
         <div class="section" style="margin-top: 24px;">
             <div class="section-header" style="margin-bottom: 16px;">
                 <h3 style="font-size: 1.1rem;">Discover — Top 15 by category</h3>
-                <div class="view-toggle" style="display: flex; gap: 2px; background: #0f0f0f; border: 1px solid #333; border-radius: 6px; padding: 2px;">
+                <div class="view-toggle">
                     <button id="exploreViewCards" class="view-toggle-btn active" onclick="setExploreView('cards')" title="Card grid">🔲 Cards</button>
                     <button id="exploreViewRows" class="view-toggle-btn" onclick="setExploreView('rows')" title="Compact rows">☰ Rows</button>
                 </div>
@@ -366,39 +381,39 @@
 
     <!-- Commit / Push Modal -->
     <div id="commitModal" class="modal-overlay" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; overflow-y: auto; padding: 40px;">
-        <div style="background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 32px; max-width: 640px; margin: 0 auto;">
-            <h2 style="margin-bottom: 8px; color: #fff;">💾 Commit / Push</h2>
-            <div id="commitContext" style="color: #888; margin-bottom: 20px; font-size: 0.9rem;"></div>
+        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 32px; max-width: 640px; margin: 0 auto;">
+            <h2 style="margin-bottom: 8px; color: var(--text);">💾 Commit / Push</h2>
+            <div id="commitContext" style="color: var(--text-muted); margin-bottom: 20px; font-size: 0.9rem;"></div>
 
             <!-- Diff preview — populated by openCommitModal via /staged-preview.
                  Shows every file git add -A would stage, with size and a warning
                  chip on anything matching a known-secret pattern or >5 MB. -->
-            <div id="commitPreview" style="margin-bottom: 16px; padding: 12px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; max-height: 240px; overflow-y: auto; font-size: 0.85rem;">
-                <div style="color: #888;">Loading staged changes…</div>
+            <div id="commitPreview" style="margin-bottom: 16px; padding: 12px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; max-height: 240px; overflow-y: auto; font-size: 0.85rem;">
+                <div style="color: var(--text-muted);">Loading staged changes…</div>
             </div>
             <!-- Override checkbox — only shown when warnings exist. -->
             <div id="commitOverrideWrap" style="display: none; margin-bottom: 16px;">
-                <label style="display: flex; gap: 8px; align-items: center; color: #fbbf24; cursor: pointer;">
+                <label style="display: flex; gap: 8px; align-items: center; color: var(--warn); cursor: pointer;">
                     <input type="checkbox" id="commitOverride">
                     <span>I've reviewed the warnings above and want to commit anyway</span>
                 </label>
             </div>
 
             <div style="margin-bottom: 16px;">
-                <label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Commit message</label>
-                <textarea id="commitMessage" rows="4" placeholder="What changed and why" style="width: 100%; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-family: monospace;"></textarea>
+                <label style="display: block; margin-bottom: 8px; color: var(--text);">Commit message</label>
+                <textarea id="commitMessage" rows="4" placeholder="What changed and why" style="width: 100%; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: monospace;"></textarea>
             </div>
 
             <div style="display: flex; gap: 24px; margin-bottom: 20px; flex-wrap: wrap;">
-                <label style="display: flex; gap: 8px; align-items: center; color: #e0e0e0; cursor: pointer;">
+                <label style="display: flex; gap: 8px; align-items: center; color: var(--text); cursor: pointer;">
                     <input type="checkbox" id="commitAddAll" checked> <span>Stage all changes (git add -A)</span>
                 </label>
-                <label style="display: flex; gap: 8px; align-items: center; color: #e0e0e0; cursor: pointer;">
+                <label style="display: flex; gap: 8px; align-items: center; color: var(--text); cursor: pointer;">
                     <input type="checkbox" id="commitPush" checked> <span>Push to origin after commit</span>
                 </label>
             </div>
 
-            <div id="commitResult" style="display: none; margin-bottom: 16px; padding: 12px; background: #0f0f0f; border-radius: 8px; font-size: 0.85rem; color: #e0e0e0; white-space: pre-wrap;"></div>
+            <div id="commitResult" style="display: none; margin-bottom: 16px; padding: 12px; background: var(--surface-inset); border-radius: 8px; font-size: 0.85rem; color: var(--text); white-space: pre-wrap;"></div>
 
             <div style="display: flex; gap: 12px;">
                 <button class="btn btn-primary" onclick="submitCommit()" id="commitSubmitBtn">Commit</button>
@@ -607,55 +622,55 @@
     <div id="settingsView" class="view">
         <div style="max-width: 720px; margin: 0 auto; padding: 16px;">
             <h2 style="margin-bottom: 8px;">⚙️ Settings</h2>
-            <p style="color: #888; margin-bottom: 32px;">All values are stored locally in SQLite — no cloud sync. Edits apply immediately and persist across server restarts.</p>
+            <p style="color: var(--text-muted); margin-bottom: 32px;">All values are stored locally in SQLite — no cloud sync. Edits apply immediately and persist across server restarts.</p>
 
-            <section style="background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 24px; margin-bottom: 24px;">
-                <h3 style="margin-bottom: 16px; color: #fff;">GitHub Personal Access Token</h3>
-                <p style="color: #888; margin-bottom: 12px; font-size: 0.9rem;">
+            <section style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 24px;">
+                <h3 style="margin-bottom: 16px; color: var(--text);">GitHub Personal Access Token</h3>
+                <p style="color: var(--text-muted); margin-bottom: 12px; font-size: 0.9rem;">
                     Required for private-repo imports, bulk import from your account, and sync status.
-                    <a href="https://github.com/settings/tokens/new?scopes=repo" target="_blank" style="color: #60a5fa;">Create one (scopes: repo)</a>
+                    <a href="https://github.com/settings/tokens/new?scopes=repo" target="_blank" style="color: var(--accent);">Create one (scopes: repo)</a>
                 </p>
-                <div id="patStatus" style="margin-bottom: 12px; color: #e0e0e0; font-size: 0.9rem;"></div>
+                <div id="patStatus" style="margin-bottom: 12px; color: var(--text); font-size: 0.9rem;"></div>
                 <div style="display: flex; gap: 8px; margin-bottom: 12px;">
-                    <input type="password" id="settingsPat" placeholder="ghp_xxxxxxxx (leave blank to keep existing)" style="flex: 1; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                    <input type="password" id="settingsPat" placeholder="ghp_xxxxxxxx (leave blank to keep existing)" style="flex: 1; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
                     <button class="btn btn-primary" onclick="saveSettingsPat()">Save Token</button>
                 </div>
                 <div style="display: flex; gap: 8px;">
                     <button class="btn btn-secondary" onclick="testGitHubPat()">Test Connection</button>
-                    <button class="btn btn-secondary" onclick="clearSettingsPat()" style="color: #ef4444; border-color: #7f1d1d;">Clear Token</button>
+                    <button class="btn btn-secondary" onclick="clearSettingsPat()" style="color: var(--danger); border-color: #7f1d1d;">Clear Token</button>
                 </div>
-                <div id="patTestResult" style="margin-top: 12px; color: #888; font-size: 0.9rem;"></div>
+                <div id="patTestResult" style="margin-top: 12px; color: var(--text-muted); font-size: 0.9rem;"></div>
             </section>
 
-            <section style="background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 24px; margin-bottom: 24px;">
-                <h3 style="margin-bottom: 16px; color: #fff;">Clone Base Directory</h3>
-                <p style="color: #888; margin-bottom: 12px; font-size: 0.9rem;">
+            <section style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 24px;">
+                <h3 style="margin-bottom: 16px; color: var(--text);">Clone Base Directory</h3>
+                <p style="color: var(--text-muted); margin-bottom: 12px; font-size: 0.9rem;">
                     Where new clones land. Default <code>/home/bfoster</code> resolves to <code>C:\home\bfoster\&lt;project&gt;</code> on Windows, or <code>/home/bfoster/&lt;project&gt;</code> on Linux/macOS.
                 </p>
-                <div id="cloneDirEffective" style="margin-bottom: 12px; color: #e0e0e0; font-size: 0.9rem;"></div>
+                <div id="cloneDirEffective" style="margin-bottom: 12px; color: var(--text); font-size: 0.9rem;"></div>
                 <div style="display: flex; gap: 8px;">
-                    <input type="text" id="settingsCloneDir" placeholder="/home/bfoster" style="flex: 1; padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0;">
+                    <input type="text" id="settingsCloneDir" placeholder="/home/bfoster" style="flex: 1; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
                     <button class="btn btn-primary" onclick="saveSettingsCloneDir()">Save Path</button>
                 </div>
             </section>
 
-            <section style="background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 24px; margin-bottom: 24px;">
-                <h3 style="margin-bottom: 16px; color: #fff;">Default Terminal (Open Terminal button)</h3>
-                <p style="color: #888; margin-bottom: 12px; font-size: 0.9rem;">
+            <section style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 24px;">
+                <h3 style="margin-bottom: 16px; color: var(--text);">Default Terminal (Open Terminal button)</h3>
+                <p style="color: var(--text-muted); margin-bottom: 12px; font-size: 0.9rem;">
                     Which terminal launchpad opens when you click <strong>💻 Open Terminal</strong> on a project. Choices depend on your OS.
                 </p>
-                <div id="terminalChoicesRow" style="margin-bottom: 12px; color: #e0e0e0; font-size: 0.9rem;">Detecting platform…</div>
+                <div id="terminalChoicesRow" style="margin-bottom: 12px; color: var(--text); font-size: 0.9rem;">Detecting platform…</div>
                 <div style="display: flex; gap: 8px; align-items: center;">
-                    <select id="settingsTerminal" style="padding: 10px; background: #0f0f0f; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; min-width: 220px;">
+                    <select id="settingsTerminal" style="padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text); min-width: 220px;">
                         <option value="">Use platform default</option>
                     </select>
                     <button class="btn btn-primary" onclick="saveSettingsTerminal()">Save</button>
                 </div>
             </section>
 
-            <section style="background: #0f0f0f; border: 1px dashed #333; border-radius: 12px; padding: 16px;">
-                <h3 style="margin-bottom: 12px; color: #888; font-size: 0.95rem;">Where this data lives</h3>
-                <ul style="color: #888; font-size: 0.85rem; margin: 0; padding-left: 20px;">
+            <section style="background: var(--surface-inset); border: 1px dashed var(--border); border-radius: 12px; padding: 16px;">
+                <h3 style="margin-bottom: 12px; color: var(--text-muted); font-size: 0.95rem;">Where this data lives</h3>
+                <ul style="color: var(--text-muted); font-size: 0.85rem; margin: 0; padding-left: 20px;">
                     <li><code>launchpad.db</code> (SQLite) — gitignored, local only</li>
                     <li>Loaded at server boot; env vars <code>GITHUB_TOKEN</code> and <code>CLONE_BASE_DIR</code> are fallbacks if no setting is stored</li>
                 </ul>
@@ -673,17 +688,17 @@
                 <div class="detail-actions">
                     <button class="btn btn-secondary" onclick="editProject()">Edit</button>
                     <button id="launchBtn" class="btn btn-primary" onclick="launchProject()" style="display: none;">🚀 Launch</button>
-                    <button id="stopBtn" class="btn btn-secondary" onclick="stopDevServer()" style="display: none; color: #ef4444;" title="Kill the running dev server">🛑 Stop Dev Server</button>
+                    <button id="stopBtn" class="btn btn-secondary" onclick="stopDevServer()" style="display: none; color: var(--danger);" title="Kill the running dev server">🛑 Stop Dev Server</button>
                     <!-- Promoted from a tiny inline chip to a real action pill so the
                          live URL is impossible to miss after Launch. Only visible
                          while a dev server is running with a detected URL. -->
-                    <button id="openInBrowserBtn" class="btn btn-primary" onclick="openInBrowser()" style="display: none; background: #10b981;" title="Open the running dev server in your browser">🌐 Open in Browser</button>
-                    <span id="detectedUrl" style="display: none; margin-left: 12px; color: #93c5fd; font-size: 0.9rem;"></span>
+                    <button id="openInBrowserBtn" class="btn btn-primary" onclick="openInBrowser()" style="display: none; background: var(--success);" title="Open the running dev server in your browser">🌐 Open in Browser</button>
+                    <span id="detectedUrl" style="display: none; margin-left: 12px; color: var(--accent-soft); font-size: 0.9rem;"></span>
                     <button id="cloneBtn" class="btn btn-primary" onclick="cloneProject()" style="display: none;">📥 Clone to Local</button>
                     <button id="syncBtn" class="btn btn-primary" onclick="checkSyncStatus()" style="display: none;">🔄 Check Sync Status</button>
                     <button id="commitBtn" class="btn btn-secondary" onclick="openCommitModal()" style="display: none;" title="Commit and/or push changes">💾 Commit / Push</button>
                     <button id="installDepsBtn" class="btn btn-secondary" onclick="runInstallDeps()" style="display: none;" title="npm install in the project directory">📦 Install Deps</button>
-                    <button id="claudeCodeBtn" class="btn btn-primary" onclick="openInClaudeCode()" style="display: none; background: #d97706;" title="Open a terminal in this folder and launch Claude Code">🤖 Open in Claude Code</button>
+                    <button id="claudeCodeBtn" class="btn btn-primary" onclick="openInClaudeCode()" style="display: none; background: var(--warn);" title="Open a terminal in this folder and launch Claude Code">🤖 Open in Claude Code</button>
                 </div>
                 <div id="syncStatus" style="margin-top: 16px; display: none;"></div>
             </div>
@@ -695,7 +710,7 @@
                             <h3 style="margin: 0;">💡 Prompt / Vision</h3>
                             <button class="btn btn-sm btn-secondary" onclick="copyPromptToClipboard()" title="Copy the prompt to paste into Claude Code">📋 Copy</button>
                         </div>
-                        <div id="promptContent" style="padding: 12px; background: #0f0f0f; border-radius: 8px; color: #e0e0e0; white-space: pre-wrap; line-height: 1.5; font-size: 0.95rem;"></div>
+                        <div id="promptContent" style="padding: 12px; background: var(--surface-inset); border-radius: 8px; color: var(--text); white-space: pre-wrap; line-height: 1.5; font-size: 0.95rem;"></div>
                     </div>
 
                     <div id="prdSection" class="detail-section" style="display: none;">
@@ -715,7 +730,7 @@
 
                     <div id="issuesSection" class="detail-section" style="display: none;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                            <h3 style="margin: 0;">🐛 Issues <span id="issuesCount" style="color: #888; font-size: 0.85rem;"></span></h3>
+                            <h3 style="margin: 0;">🐛 Issues <span id="issuesCount" style="color: var(--text-muted); font-size: 0.85rem;"></span></h3>
                             <div style="display: flex; gap: 4px;">
                                 <button id="issuesOpenTab" class="import-tab active" onclick="loadIssues('open')">Open</button>
                                 <button id="issuesClosedTab" class="import-tab" onclick="loadIssues('closed')">Closed</button>
@@ -748,6 +763,9 @@
         </div>
     </div>
 
+    <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="false"></div>
+
+    <script src="theme.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
