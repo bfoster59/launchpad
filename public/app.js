@@ -121,7 +121,7 @@ async function loadSettings() {
 
         const patEl = document.getElementById('patStatus');
         if (data.github_pat && data.github_pat.set) {
-            patEl.textContent = `Token is set (${data.github_pat.preview}). Enter a new value and Save to replace, or Clear to remove.`;
+            patEl.textContent = `Token is set. Enter a new value and Save to replace, or Clear to remove.`;
             patEl.style.color = '#22c55e';
         } else {
             patEl.textContent = 'No token set — private-repo features and Bulk Import are disabled.';
@@ -1568,7 +1568,7 @@ async function showBulkImport() {
         const input = document.getElementById('githubToken');
         if (s.github_pat && s.github_pat.set && !input.value) {
             input.value = '__USE_STORED__';
-            input.placeholder = `Using stored token (${s.github_pat.preview}) — edit to override`;
+            input.placeholder = `Using stored token — edit to override`;
             input.dataset.usesStored = 'true';
         }
     } catch (e) { /* non-fatal */ }
