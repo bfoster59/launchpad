@@ -83,6 +83,29 @@ All settings live in the local SQLite DB (Settings page) — no cloud sync.
 
 ---
 
+## Running project code — trust model
+
+LaunchPad is a local developer tool that, by design, **runs the code of the
+projects you point it at**:
+
+- **Launch** runs the repo's own `npm run dev` / `npm start` script.
+- **Install deps** runs `npm install`, which executes that repo's install
+  lifecycle scripts.
+- **Open Terminal / Open in Claude Code** opens a shell in the project directory
+  (optionally auto-running `npm run dev`, `npm start`, or `claude`).
+
+Treat cloning-and-launching a repo exactly like running it from your own shell:
+**only Launch / Install / Open Terminal on repositories you trust.** There is no
+sandbox — these run with your user's permissions.
+
+The server binds to loopback (`127.0.0.1`) and has no auth, so it isn't reachable
+from your network. As additional defense, state-changing requests are rejected
+unless they are same-origin (an Origin/CSRF + DNS-rebinding guard), so a random
+web page you visit in the same browser can't drive these actions against your
+local instance.
+
+---
+
 ## Tech Stack
 
 - **Frontend:** vanilla JavaScript + CSS (token-based theming, no framework, no build step)
