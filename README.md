@@ -92,7 +92,8 @@ projects you point it at**:
 - **Install deps** runs `npm install`, which executes that repo's install
   lifecycle scripts.
 - **Open Terminal / Open in Claude Code** opens a shell in the project directory
-  (optionally auto-running `npm run dev`, `npm start`, or `claude`).
+  (on Windows/Linux, optionally auto-running `npm run dev`, `npm start`, or
+  `claude`).
 
 Treat cloning-and-launching a repo exactly like running it from your own shell:
 **only Launch / Install / Open Terminal on repositories you trust.** There is no

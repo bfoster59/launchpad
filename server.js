@@ -922,20 +922,25 @@ function getTerminalSpawn(cwd, runCommand) {
             cmd: rc ? winStart('cmd', '/K', rc) : winStart('cmd', '/K'),
             powershell: rc ? winStart('powershell', '-NoExit', '-Command', rc) : winStart('powershell', '-NoExit'),
             pwsh: rc ? winStart('pwsh', '-NoExit', '-Command', rc) : winStart('pwsh', '-NoExit'),
-            gitbash: rc ? winStart('C:\\Program Files\\Git\\bin\\bash.exe', '-c', `${rc}; exec bash`)
-                        : winStart('C:\\Program Files\\Git\\bin\\bash.exe', '-i', '-l')
+            // bash.exe --cd=<dir> sets the startup dir reliably; a login shell
+            // (-l) would instead cd to $HOME via /etc/profile, discarding cwd.
+            gitbash: rc ? winStart('C:\\Program Files\\Git\\bin\\bash.exe', `--cd=${cwd}`, '-c', `${rc}; exec bash`)
+                        : winStart('C:\\Program Files\\Git\\bin\\bash.exe', `--cd=${cwd}`)
         },
         darwin: {
             terminal: { file: 'open', args: ['-a', 'Terminal', cwd] },
             iterm: { file: 'open', args: ['-a', 'iTerm', cwd] }
         },
         linux: {
-            // These emulators are their own window and inherit cwd from the spawn
-            // `cwd` option; rc runs in an interactive bash that stays open.
-            'gnome-terminal': rc ? { file: 'gnome-terminal', args: ['--', 'bash', '-c', `${rc}; exec bash`] }
-                                 : { file: 'gnome-terminal', args: [] },
-            konsole: rc ? { file: 'konsole', args: ['-e', 'bash', '-c', `${rc}; exec bash`] }
-                        : { file: 'konsole', args: [] },
+            // gnome-terminal/konsole get an explicit working-dir flag — their
+            // client/server (D-Bus) model doesn't reliably inherit the launcher's
+            // cwd. xterm does inherit the spawn `cwd` option. rc runs in a bash
+            // that stays open. (cwd is resolveSafeDir-validated, passed as a
+            // discrete arg — never shell-parsed.)
+            'gnome-terminal': rc ? { file: 'gnome-terminal', args: [`--working-directory=${cwd}`, '--', 'bash', '-c', `${rc}; exec bash`] }
+                                 : { file: 'gnome-terminal', args: [`--working-directory=${cwd}`] },
+            konsole: rc ? { file: 'konsole', args: ['--workdir', cwd, '-e', 'bash', '-c', `${rc}; exec bash`] }
+                        : { file: 'konsole', args: ['--workdir', cwd] },
             xterm: rc ? { file: 'xterm', args: ['-e', 'bash', '-c', `${rc}; exec bash`] }
                       : { file: 'xterm', args: [] }
         }
@@ -2079,3 +2084,4 @@ module.exports.PORT = PORT; // the origin guard's canonical host/origin uses thi
 module.exports.resolveSafeDir = resolveSafeDir;
 module.exports.runGit = runGit;
 module.exports.sanitizeTerminalRunCommand = sanitizeTerminalRunCommand;
+module.exports.ALLOWED_TERMINAL_RUN = ALLOWED_TERMINAL_RUN;
