@@ -968,7 +968,10 @@ async function refreshRunningState() {
                 if (urlPid) urlPid.textContent = `pid ${data.pid}`;
                 // Tiny chip — kept for backward compatibility, less prominent
                 if (urlChip) {
-                    urlChip.innerHTML = `🟢 <a href="${data.url}" target="_blank" style="color: var(--accent-soft);">${data.url}</a>`;
+                    // safeUrl() blocks non-http(s) schemes (javascript:/data:) and
+                    // HTML-escapes for the href attribute; escapeHtml() for the text.
+                    // Consistent with urlLink above and the rest of app.js. (Gate 3 F7)
+                    urlChip.innerHTML = `🟢 <a href="${safeUrl(data.url)}" target="_blank" style="color: var(--accent-soft);">${escapeHtml(data.url)}</a>`;
                     urlChip.style.display = 'inline';
                 }
                 // Auto-open browser the first time we learn the URL for this session

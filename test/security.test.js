@@ -16,7 +16,7 @@ const CLONE_BASE = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-base-'));
 process.env.LAUNCHPAD_DB = ':memory:';
 process.env.CLONE_BASE_DIR = CLONE_BASE;
 const app = require('../server');
-const { resolveSafeDir, runGit, sanitizeTerminalRunCommand } = app;
+const { resolveSafeDir, runGit, sanitizeTerminalRunCommand, ALLOWED_TERMINAL_RUN } = app;
 
 test('resolveSafeDir rejects every shell metacharacter', () => {
     // Broad coverage: every rejected character — including ones illegal as
@@ -71,6 +71,17 @@ test('sanitizeTerminalRunCommand allows only the exact whitelist', () => {
     for (const bad of ['rm -rf /', 'npm run dev; rm -rf /', 'claude && curl evil', 'npm  run  dev', '', undefined, null]) {
         assert.strictEqual(sanitizeTerminalRunCommand(bad), null,
             `expected null for non-whitelisted ${JSON.stringify(bad)}`);
+    }
+});
+
+test('terminal run-command whitelist stays free of shell/cmd metacharacters (winStart safety invariant)', () => {
+    // The Windows open-terminal path runs `cmd /c start "" <exe> <rc>`; rc is safe
+    // there only because the whitelist has no cmd metacharacters (Node's arg
+    // escaping is not cmd.exe-aware). Guard the invariant so a future whitelist
+    // addition can't silently make that path injectable.
+    for (const cmd of ALLOWED_TERMINAL_RUN) {
+        assert.ok(!/[&|<>^%"'`$;()!]/.test(cmd),
+            `whitelisted terminal command must stay metacharacter-free: ${JSON.stringify(cmd)}`);
     }
 });
 

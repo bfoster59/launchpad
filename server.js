@@ -92,8 +92,7 @@ function resolveSafeDir(requested) {
 
 // Whitelist of commands the terminal launcher may auto-run after cd-ing into a
 // project. Anything not on the list is dropped (returns null) so an attacker can
-// never get an arbitrary command appended to the spawned terminal string, which
-// is the one remaining shell:true path (see /api/util/open-terminal). (Gate 3 F2)
+// never get an arbitrary command into the terminal invocation. (Gate 3 F2/F4)
 const ALLOWED_TERMINAL_RUN = new Set(['claude', 'npm run dev', 'npm start']);
 function sanitizeTerminalRunCommand(cmd) {
     return ALLOWED_TERMINAL_RUN.has(cmd) ? cmd : null;
@@ -893,78 +892,94 @@ app.get('/api/projects/:id/branches', async (req, res) => {
 
 // ========== UTILITY: Open terminal / folder in the project's local_path ==========
 
-// Resolve the user's preferred terminal command template. Settings > env > platform default.
-// If `runCommand` is given, append it so the terminal opens AND runs that command
-// (useful for 'Open in Claude Code' — spawn terminal and auto-launch claude).
-function getTerminalCommand(cwd, runCommand) {
+// Resolve the user's preferred terminal launcher as an executable + argument
+// array (Settings > env > platform default). If `runCommand` is given, the
+// terminal opens AND runs it. (Gate 3 F4)
+//
+// Returns `{ file, args }` for spawn WITHOUT a shell. The working directory is
+// NOT part of this — it is passed as the spawn `cwd` option by the caller, so it
+// is never interpolated into a shell/command string. `runCommand` is already
+// whitelisted (sanitizeTerminalRunCommand) to a fixed safe set. This removes
+// open-terminal's interpolation of the user-supplied path into a shell string —
+// the last such user-controlled shell surface (the launch route's shell:true
+// runs only a literal `npm run dev|start`, never a user path).
+function getTerminalSpawn(cwd, runCommand) {
     const stored = db.getSetting('terminal_app');
     const platform = process.platform;
-    const cwdQuoted = `"${cwd.replace(/"/g, '\\"')}"`;
     const rc = runCommand ? String(runCommand).trim() : '';
+
+    // On Windows, `start` opens a NEW console window; it is a cmd builtin, so we
+    // invoke it as a discrete arg array to cmd (NOT shell:true). The new window
+    // inherits cwd from the spawn `cwd` option — cwd is never in the arg string.
+    const winStart = (exe, ...exeArgs) => ({ file: 'cmd', args: ['/c', 'start', '', exe, ...exeArgs] });
 
     const defaults = {
         win32: {
-            wt: rc
-                ? `wt new-tab -d ${cwdQuoted} cmd /K "${rc}"`
-                : `wt new-tab -d ${cwdQuoted}`,
-            cmd: rc
-                ? `start cmd /K "cd /d ${cwdQuoted} && ${rc}"`
-                : `start cmd /K "cd /d ${cwdQuoted}"`,
-            powershell: rc
-                ? `start powershell -NoExit -Command "Set-Location -LiteralPath ${cwdQuoted}; ${rc}"`
-                : `start powershell -NoExit -Command "Set-Location -LiteralPath ${cwdQuoted}"`,
-            pwsh: rc
-                ? `start pwsh -NoExit -Command "Set-Location -LiteralPath ${cwdQuoted}; ${rc}"`
-                : `start pwsh -NoExit -Command "Set-Location -LiteralPath ${cwdQuoted}"`,
-            gitbash: rc
-                ? `start "" "C:\\Program Files\\Git\\bin\\bash.exe" --cd=${cwdQuoted} -c "${rc}; exec bash"`
-                : `start "" "C:\\Program Files\\Git\\bin\\bash.exe" --cd=${cwdQuoted}`
+            // wt.exe opens its own window; -d takes the directory as a literal arg
+            // (not shell-parsed). rc runs in a cmd shell inside the new tab.
+            wt: rc ? { file: 'wt', args: ['new-tab', '-d', cwd, 'cmd', '/K', rc] }
+                   : { file: 'wt', args: ['new-tab', '-d', cwd] },
+            cmd: rc ? winStart('cmd', '/K', rc) : winStart('cmd', '/K'),
+            // Force the dir with Set-Location so a user's $PROFILE (which may
+            // `Set-Location $HOME` and runs before -Command) can't strand the
+            // shell in home. cwd is resolveSafeDir-validated (single-quote among
+            // the rejected chars) so the single-quoted PS literal is injection-safe;
+            // `;` is a PS separator, not a cmd metacharacter, so it passes cleanly
+            // through the nested `cmd /c start`.
+            powershell: winStart('powershell', '-NoExit', '-Command', `Set-Location -LiteralPath '${cwd}'${rc ? '; ' + rc : ''}`),
+            pwsh: winStart('pwsh', '-NoExit', '-Command', `Set-Location -LiteralPath '${cwd}'${rc ? '; ' + rc : ''}`),
+            // bash.exe --cd=<dir> sets the startup dir reliably; a login shell
+            // (-l) would instead cd to $HOME via /etc/profile, discarding cwd.
+            gitbash: rc ? winStart('C:\\Program Files\\Git\\bin\\bash.exe', `--cd=${cwd}`, '-c', `${rc}; exec bash`)
+                        : winStart('C:\\Program Files\\Git\\bin\\bash.exe', `--cd=${cwd}`)
         },
         darwin: {
-            terminal: `open -a Terminal ${cwdQuoted}`,
-            iterm: `open -a iTerm ${cwdQuoted}`
+            terminal: { file: 'open', args: ['-a', 'Terminal', cwd] },
+            iterm: { file: 'open', args: ['-a', 'iTerm', cwd] }
         },
         linux: {
-            'gnome-terminal': rc
-                ? `gnome-terminal --working-directory=${cwdQuoted} -- bash -c "${rc}; exec bash"`
-                : `gnome-terminal --working-directory=${cwdQuoted}`,
-            konsole: rc
-                ? `konsole --workdir ${cwdQuoted} -e bash -c "${rc}; exec bash"`
-                : `konsole --workdir ${cwdQuoted}`,
-            xterm: rc
-                ? `xterm -e "cd ${cwdQuoted} && ${rc}; bash"`
-                : `xterm -e "cd ${cwdQuoted} && bash"`
+            // gnome-terminal/konsole get an explicit working-dir flag — their
+            // client/server (D-Bus) model doesn't reliably inherit the launcher's
+            // cwd. xterm does inherit the spawn `cwd` option. rc runs in a bash
+            // that stays open. (cwd is resolveSafeDir-validated, passed as a
+            // discrete arg — never shell-parsed.)
+            'gnome-terminal': rc ? { file: 'gnome-terminal', args: [`--working-directory=${cwd}`, '--', 'bash', '-c', `${rc}; exec bash`] }
+                                 : { file: 'gnome-terminal', args: [`--working-directory=${cwd}`] },
+            konsole: rc ? { file: 'konsole', args: ['--workdir', cwd, '-e', 'bash', '-c', `${rc}; exec bash`] }
+                        : { file: 'konsole', args: ['--workdir', cwd] },
+            xterm: rc ? { file: 'xterm', args: ['-e', 'bash', '-c', `${rc}; exec bash`] }
+                      : { file: 'xterm', args: [] }
         }
     };
 
     const platformDefaults = defaults[platform] || defaults.linux;
-    if (stored && platformDefaults[stored]) return platformDefaults[stored];
     const fallbackKey = platform === 'win32' ? 'wt'
                       : platform === 'darwin' ? 'terminal'
                       : 'gnome-terminal';
-    return platformDefaults[fallbackKey];
+    return (stored && platformDefaults[stored]) ? platformDefaults[stored] : platformDefaults[fallbackKey];
 }
 
 app.post('/api/util/open-terminal', (req, res) => {
     try {
         const { spawn } = require('child_process');
-        // cwd is interpolated into a shell command (Windows terminal launch), so
-        // it must pass strict validation: no shell metacharacters, real dir,
-        // inside the allowlisted base or a tracked project.
+        // Validate the directory (no shell metacharacters, real dir, inside the
+        // allowlisted base or a tracked project). This stays as defense-in-depth
+        // even though cwd is now passed as the spawn `cwd` option rather than
+        // interpolated into any command string.
         const cwd = resolveSafeDir(req.body.path);
         if (!cwd) {
             return res.status(400).json({ error: 'Path not found or not an allowed project directory' });
         }
-        // Optional command that the terminal should run after cd-ing.
-        // Whitelist keeps arbitrary shell strings from being injected.
+        // Optional command the terminal runs on open — whitelisted to a fixed set.
         const runCommand = sanitizeTerminalRunCommand(req.body.command);
-        const cmd = getTerminalCommand(cwd, runCommand);
-        // spawn with shell:true + detached+unref so the terminal opens a
-        // visible window and outlives the launchpad request.
-        const child = spawn(cmd, { shell: true, detached: true, stdio: 'ignore' });
+        const { file, args } = getTerminalSpawn(cwd, runCommand);
+        // No shell: spawn the terminal executable directly with an argument array.
+        // cwd is the process working directory (not part of any command string);
+        // detached + unref so the terminal window outlives this request.
+        const child = spawn(file, args, { cwd, detached: true, stdio: 'ignore', windowsHide: true });
         child.on('error', (err) => console.error('open-terminal:', err.message));
         child.unref();
-        res.json({ success: true, command: cmd, cwd });
+        res.json({ success: true, command: `${file} ${args.join(' ')}`, cwd });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -2075,3 +2090,4 @@ module.exports.PORT = PORT; // the origin guard's canonical host/origin uses thi
 module.exports.resolveSafeDir = resolveSafeDir;
 module.exports.runGit = runGit;
 module.exports.sanitizeTerminalRunCommand = sanitizeTerminalRunCommand;
+module.exports.ALLOWED_TERMINAL_RUN = ALLOWED_TERMINAL_RUN;
