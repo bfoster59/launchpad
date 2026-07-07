@@ -95,6 +95,26 @@ test('same-origin POST passes the guard and reaches the handler', async () => {
     assert.strictEqual(res.status, 400);
 });
 
+test('cross-origin GET to a mutating route (sync-status) is rejected with 403', async () => {
+    // F1 covers "GETs that mutate": sync-status runs git fetch + writes the DB, so
+    // it must be gated even though it is a GET. Valid Host, hostile Origin.
+    const res = await request({
+        method: 'GET', path: '/api/projects/1/sync-status',
+        headers: { host: guardHost(), origin: 'http://evil.example.com' },
+    });
+    assert.strictEqual(res.status, 403);
+});
+
+test('same-origin GET to a mutating route passes the guard', async () => {
+    // No project #1 in the :memory: DB, so it 404s in the handler — NOT 403.
+    const res = await request({
+        method: 'GET', path: '/api/projects/1/sync-status',
+        headers: sameOrigin(),
+    });
+    assert.notStrictEqual(res.status, 403);
+    assert.strictEqual(res.status, 404);
+});
+
 test(':id route param rejects a non-integer with 400', async () => {
     // GET is not gated by the origin guard, so this exercises the app.param check.
     const res = await request({ method: 'GET', path: '/api/projects/not-an-int' });

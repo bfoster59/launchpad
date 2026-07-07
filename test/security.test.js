@@ -19,18 +19,34 @@ const app = require('../server');
 const { resolveSafeDir, runGit, sanitizeTerminalRunCommand } = app;
 
 test('resolveSafeDir rejects every shell metacharacter', () => {
-    // The regex guard fires before the filesystem check, so the metacharacter
-    // alone must force null regardless of whether the path exists.
+    // Broad coverage: every rejected character — including ones illegal as
+    // directory names (<>|" and CR/LF), which can only be fed as non-existent
+    // paths — yields null. (For a non-existent path the existence check alone
+    // would also return null; the next test feeds a REAL in-base directory to
+    // prove the metacharacter *regex* is specifically what rejects it.)
     for (const ch of ['`', '$', ';', '&', '|', '<', '>', '^', '"', "'", '%', '\n', '\r']) {
         assert.strictEqual(resolveSafeDir(`${CLONE_BASE}${ch}evil`), null,
             `expected null for metacharacter ${JSON.stringify(ch)}`);
     }
 });
 
-test('resolveSafeDir rejects traversal and out-of-base directories', () => {
-    // Traversal that climbs above the clone base.
-    assert.strictEqual(resolveSafeDir(path.join(CLONE_BASE, '..', '..', 'nope')), null);
-    // A real directory that exists but is outside the base and not a tracked project.
+test('resolveSafeDir rejects a REAL in-base directory whose name contains a metacharacter', () => {
+    // Isolates the regex guard from the existence check: each directory EXISTS and
+    // is INSIDE the clone base, so the ONLY thing that can force null is the
+    // metacharacter rejection — delete the regex in resolveSafeDir and this fails.
+    // Only metacharacters legal in a directory name on both Windows and POSIX are
+    // used (<>|" and CR/LF are covered by the non-existent-path test above).
+    for (const ch of ['&', '$', ';', '^', '%', "'", '`']) {
+        const dir = fs.mkdtempSync(path.join(CLONE_BASE, `meta${ch}-`));
+        assert.strictEqual(resolveSafeDir(dir), null,
+            `a real in-base dir containing ${JSON.stringify(ch)} must be rejected`);
+    }
+});
+
+test('resolveSafeDir rejects out-of-base directories that really exist', () => {
+    // Use REAL existing directories outside the base so the containment check —
+    // not the existence check — is what forces null.
+    assert.strictEqual(resolveSafeDir(path.dirname(CLONE_BASE)), null); // tmp root, above the base
     assert.strictEqual(resolveSafeDir(os.homedir()), null);
 });
 

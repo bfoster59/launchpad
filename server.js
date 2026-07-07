@@ -154,38 +154,61 @@ app.use(express.static('public'));
 // LaunchPad has no auth and its state-changing endpoints shell out to git/npm, so
 // a cross-origin web page (or a DNS-rebinding attack that resolves a hostile
 // domain to 127.0.0.1) must not be able to drive them. Loopback binding stops LAN
-// callers but NOT the user's own browser issuing cross-origin POSTs. This guard
-// rejects any state-changing request (anything but GET/HEAD/OPTIONS) unless it is
-// same-origin:
-//   • Host must be one of our loopback hosts — a rebinding attack arrives with the
+// callers but NOT the user's own browser issuing cross-origin requests. A request
+// counts as same-origin only when ALL of these hold:
+//   • Host is one of our allowed hosts — a rebinding attack arrives with the
 //     attacker's Host (e.g. evil.com:3020) and is rejected before any handler runs.
-//   • Origin, if present, must be one of our own origins.
-//   • Sec-Fetch-Site, if present (all current browsers send it), must be
-//     same-origin or none (a direct address-bar navigation / non-browser client).
-// Read-only GETs are untouched, so the static SPA and every data read work as-is.
+//   • Origin, if present, is one of our own origins.
+//   • Sec-Fetch-Site, if present (all current browsers send it), is same-origin or
+//     none (a direct address-bar navigation / non-browser client).
 const GUARD_HOSTS = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`]);
 const GUARD_ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
-// Honor a deliberate, specific non-loopback HOST bind (the documented "you accept
-// that risk" opt-in) so the guard never breaks an intentional deployment. HOST=
-// 0.0.0.0 binds all interfaces and can't be enumerated to a single host here.
-if (process.env.HOST && !['127.0.0.1', 'localhost', '0.0.0.0'].includes(process.env.HOST)) {
-    GUARD_HOSTS.add(`${process.env.HOST}:${PORT}`);
-    GUARD_ORIGINS.add(`http://${process.env.HOST}:${PORT}`);
+// Honor a deliberate non-loopback HOST bind (the documented "you accept that risk"
+// opt-in) so the guard never 403s legitimate writes on an intentional deployment.
+// For HOST=0.0.0.0 (bind-all) there is no single host to name, so enumerate this
+// machine's own non-internal IPv4 addresses.
+if (process.env.HOST && process.env.HOST !== '127.0.0.1' && process.env.HOST !== 'localhost') {
+    const bindHosts = [];
+    if (process.env.HOST === '0.0.0.0') {
+        for (const iface of Object.values(require('os').networkInterfaces())) {
+            for (const net of iface || []) {
+                if (net.family === 'IPv4' && !net.internal) bindHosts.push(net.address);
+            }
+        }
+    } else {
+        bindHosts.push(process.env.HOST);
+    }
+    for (const h of bindHosts) {
+        GUARD_HOSTS.add(`${h}:${PORT}`);
+        GUARD_ORIGINS.add(`http://${h}:${PORT}`);
+    }
 }
-function originGuard(req, res, next) {
-    // Only state-changing methods are gated; safe reads pass straight through.
-    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
-    if (!GUARD_HOSTS.has(req.headers.host)) {
-        return res.status(403).json({ error: 'Forbidden: request Host is not an allowed LaunchPad origin' });
-    }
+
+// True iff the request's Host/Origin/Sec-Fetch-Site all check out as same-origin.
+function isSameOrigin(req) {
+    if (!GUARD_HOSTS.has(req.headers.host)) return false;
     const origin = req.headers.origin;
-    if (origin && !GUARD_ORIGINS.has(origin)) {
-        return res.status(403).json({ error: 'Forbidden: cross-origin request rejected' });
-    }
+    if (origin && !GUARD_ORIGINS.has(origin)) return false;
     const site = req.headers['sec-fetch-site'];
-    if (site && site !== 'same-origin' && site !== 'none') {
-        return res.status(403).json({ error: 'Forbidden: cross-site request rejected' });
-    }
+    if (site && site !== 'same-origin' && site !== 'none') return false;
+    return true;
+}
+function rejectCrossOrigin(res) {
+    return res.status(403).json({ error: 'Forbidden: cross-origin or cross-site request rejected' });
+}
+
+// Global guard: gate every state-changing method. Read-only GETs pass through so
+// the static SPA and data reads work as-is — EXCEPT the few GET routes that mutate
+// state, which opt in explicitly via requireSameOrigin (F1 covers "GETs that
+// mutate", which this method-based gate would otherwise let through).
+function originGuard(req, res, next) {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+    if (!isSameOrigin(req)) return rejectCrossOrigin(res);
+    next();
+}
+// Per-route guard for GET endpoints that DO change state (git fetch, DB writes).
+function requireSameOrigin(req, res, next) {
+    if (!isSameOrigin(req)) return rejectCrossOrigin(res);
     next();
 }
 app.use(originGuard);
@@ -682,7 +705,7 @@ async function backfillVisibility() {
 }
 
 // Check GitHub sync status
-app.get('/api/projects/:id/sync-status', async (req, res) => {
+app.get('/api/projects/:id/sync-status', requireSameOrigin, async (req, res) => {
     try {
         const project = db.getProject(parseInt(req.params.id));
         if (!project) return res.status(404).json({ error: 'Project not found' });
@@ -717,7 +740,7 @@ app.post('/api/projects/refresh-all', async (req, res) => {
 // exists with a `.git` subdir, and run a quick `git status --porcelain` to
 // detect uncommitted changes. Also opportunistically backfill local_path on
 // projects where we detect a clone at the canonical path.
-app.get('/api/local-clone-detect', async (req, res) => {
+app.get('/api/local-clone-detect', requireSameOrigin, async (req, res) => {
     try {
         const fs = require('fs');
         const path = require('path');
@@ -2052,4 +2075,3 @@ module.exports.PORT = PORT; // the origin guard's canonical host/origin uses thi
 module.exports.resolveSafeDir = resolveSafeDir;
 module.exports.runGit = runGit;
 module.exports.sanitizeTerminalRunCommand = sanitizeTerminalRunCommand;
-module.exports.originGuard = originGuard;
