@@ -9,8 +9,10 @@ const PORT = 3020;
 // explicitly (behind a trusted network) only if you accept that risk.
 const HOST = process.env.HOST || '127.0.0.1';
 
-// Initialize database
-const db = new LaunchpadDB();
+// Initialize database. Path is injectable via LAUNCHPAD_DB so the test suite can
+// run against :memory: without creating or locking the real launchpad.db; unset in
+// production, where the constructor defaults to the on-disk file. (Gate 3 F3)
+const db = new LaunchpadDB(process.env.LAUNCHPAD_DB);
 
 // Any git operation we spawn should fail fast on auth prompts instead of
 // hanging — GIT_TERMINAL_PROMPT=0 tells git "no interactive stdin available".
@@ -88,6 +90,15 @@ function resolveSafeDir(requested) {
     return null;
 }
 
+// Whitelist of commands the terminal launcher may auto-run after cd-ing into a
+// project. Anything not on the list is dropped (returns null) so an attacker can
+// never get an arbitrary command appended to the spawned terminal string, which
+// is the one remaining shell:true path (see /api/util/open-terminal). (Gate 3 F2)
+const ALLOWED_TERMINAL_RUN = new Set(['claude', 'npm run dev', 'npm start']);
+function sanitizeTerminalRunCommand(cmd) {
+    return ALLOWED_TERMINAL_RUN.has(cmd) ? cmd : null;
+}
+
 // --- GitHub call resilience (Gate 3 phase 3b: M4) ---
 // Map an async fn over items with bounded concurrency (no external deps).
 // Replaces Promise.all over a 100-repo list, which fired up to 100 parallel
@@ -138,6 +149,47 @@ async function githubRetry(fn, { tries = 3, baseDelayMs = 1000 } = {}) {
 
 // Middleware
 app.use(express.static('public'));
+
+// --- Same-origin / anti-CSRF + DNS-rebinding guard (Gate 3 F1) ---
+// LaunchPad has no auth and its state-changing endpoints shell out to git/npm, so
+// a cross-origin web page (or a DNS-rebinding attack that resolves a hostile
+// domain to 127.0.0.1) must not be able to drive them. Loopback binding stops LAN
+// callers but NOT the user's own browser issuing cross-origin POSTs. This guard
+// rejects any state-changing request (anything but GET/HEAD/OPTIONS) unless it is
+// same-origin:
+//   • Host must be one of our loopback hosts — a rebinding attack arrives with the
+//     attacker's Host (e.g. evil.com:3020) and is rejected before any handler runs.
+//   • Origin, if present, must be one of our own origins.
+//   • Sec-Fetch-Site, if present (all current browsers send it), must be
+//     same-origin or none (a direct address-bar navigation / non-browser client).
+// Read-only GETs are untouched, so the static SPA and every data read work as-is.
+const GUARD_HOSTS = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`]);
+const GUARD_ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
+// Honor a deliberate, specific non-loopback HOST bind (the documented "you accept
+// that risk" opt-in) so the guard never breaks an intentional deployment. HOST=
+// 0.0.0.0 binds all interfaces and can't be enumerated to a single host here.
+if (process.env.HOST && !['127.0.0.1', 'localhost', '0.0.0.0'].includes(process.env.HOST)) {
+    GUARD_HOSTS.add(`${process.env.HOST}:${PORT}`);
+    GUARD_ORIGINS.add(`http://${process.env.HOST}:${PORT}`);
+}
+function originGuard(req, res, next) {
+    // Only state-changing methods are gated; safe reads pass straight through.
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+    if (!GUARD_HOSTS.has(req.headers.host)) {
+        return res.status(403).json({ error: 'Forbidden: request Host is not an allowed LaunchPad origin' });
+    }
+    const origin = req.headers.origin;
+    if (origin && !GUARD_ORIGINS.has(origin)) {
+        return res.status(403).json({ error: 'Forbidden: cross-origin request rejected' });
+    }
+    const site = req.headers['sec-fetch-site'];
+    if (site && site !== 'same-origin' && site !== 'none') {
+        return res.status(403).json({ error: 'Forbidden: cross-site request rejected' });
+    }
+    next();
+}
+app.use(originGuard);
+
 app.use(express.json({ limit: '10mb' })); // Increase limit for bulk imports
 
 // Validate :id route params once, globally — reject non-positive-integers with
@@ -882,8 +934,7 @@ app.post('/api/util/open-terminal', (req, res) => {
         }
         // Optional command that the terminal should run after cd-ing.
         // Whitelist keeps arbitrary shell strings from being injected.
-        const allowedRun = new Set(['claude', 'npm run dev', 'npm start']);
-        const runCommand = allowedRun.has(req.body.command) ? req.body.command : null;
+        const runCommand = sanitizeTerminalRunCommand(req.body.command);
         const cmd = getTerminalCommand(cwd, runCommand);
         // spawn with shell:true + detached+unref so the terminal opens a
         // visible window and outlives the launchpad request.
@@ -1524,7 +1575,9 @@ app.get('/api/settings', (req, res) => {
         const result = {};
         all.forEach(s => {
             if (s.key === 'github_pat') {
-                result[s.key] = { set: !!s.value, preview: s.value ? `${s.value.slice(0, 7)}…` : null };
+                // Never return any bytes of the token — only whether one is set.
+                // A 7-char preview still leaks the token class/prefix. (Gate 3 F6)
+                result[s.key] = { set: !!s.value };
             } else {
                 result[s.key] = s.value;
             }
@@ -1991,3 +2044,12 @@ process.on('exit', () => db.close());
 }
 
 module.exports = app;
+// Test-only hooks: expose the security-critical pure helpers so the suite can
+// assert them directly without binding a port. Attaching to the app function
+// keeps `require('./server')` returning the Express app (the smoke test relies
+// on `typeof app === 'function'`).
+module.exports.PORT = PORT; // the origin guard's canonical host/origin uses this
+module.exports.resolveSafeDir = resolveSafeDir;
+module.exports.runGit = runGit;
+module.exports.sanitizeTerminalRunCommand = sanitizeTerminalRunCommand;
+module.exports.originGuard = originGuard;
