@@ -14,8 +14,9 @@ closes those gaps. No feature changes.
   the local server — e.g. from a web page you visit, or a DNS-rebinding attack —
   are now rejected, so they can't drive git/npm actions against your instance.
 - **Open Terminal** no longer builds a shell string: it spawns the terminal
-  executable directly with an argument array (no `shell:true`), with the project
-  path passed as the working directory rather than interpolated into a command.
+  executable directly with an argument array (no `shell:true`). The project path
+  is passed as the spawn working directory (and, where a launcher needs it, as a
+  validated literal argument) rather than composed into a shell command string.
 - **GitHub token** is no longer previewed in the settings API response (it had
   returned the first 7 characters); it now reports only whether a token is set.
 - **Dev-server URL chip** is HTML-escaped (`safeUrl`/`escapeHtml`), consistent
