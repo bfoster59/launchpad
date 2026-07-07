@@ -920,8 +920,14 @@ function getTerminalSpawn(cwd, runCommand) {
             wt: rc ? { file: 'wt', args: ['new-tab', '-d', cwd, 'cmd', '/K', rc] }
                    : { file: 'wt', args: ['new-tab', '-d', cwd] },
             cmd: rc ? winStart('cmd', '/K', rc) : winStart('cmd', '/K'),
-            powershell: rc ? winStart('powershell', '-NoExit', '-Command', rc) : winStart('powershell', '-NoExit'),
-            pwsh: rc ? winStart('pwsh', '-NoExit', '-Command', rc) : winStart('pwsh', '-NoExit'),
+            // Force the dir with Set-Location so a user's $PROFILE (which may
+            // `Set-Location $HOME` and runs before -Command) can't strand the
+            // shell in home. cwd is resolveSafeDir-validated (single-quote among
+            // the rejected chars) so the single-quoted PS literal is injection-safe;
+            // `;` is a PS separator, not a cmd metacharacter, so it passes cleanly
+            // through the nested `cmd /c start`.
+            powershell: winStart('powershell', '-NoExit', '-Command', `Set-Location -LiteralPath '${cwd}'${rc ? '; ' + rc : ''}`),
+            pwsh: winStart('pwsh', '-NoExit', '-Command', `Set-Location -LiteralPath '${cwd}'${rc ? '; ' + rc : ''}`),
             // bash.exe --cd=<dir> sets the startup dir reliably; a login shell
             // (-l) would instead cd to $HOME via /etc/profile, discarding cwd.
             gitbash: rc ? winStart('C:\\Program Files\\Git\\bin\\bash.exe', `--cd=${cwd}`, '-c', `${rc}; exec bash`)
