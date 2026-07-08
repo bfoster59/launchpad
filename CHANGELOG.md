@@ -2,6 +2,36 @@
 
 All notable changes to LaunchPad. Format loosely based on [Keep a Changelog](https://keepachangelog.com/). This project is local-only (not published to npm).
 
+## [1.1.1] — 2026-07-07 — Security stabilization
+
+A follow-up deep review of v1.1.0 found that the shell-executing endpoints had no
+cross-origin protection and the injection hardening had no tests. This release
+closes those gaps. No feature changes.
+
+### Security
+- **Origin/CSRF + DNS-rebinding guard** on every state-changing endpoint
+  (including the two mutating GET routes). Cross-origin or cross-site requests to
+  the local server — e.g. from a web page you visit, or a DNS-rebinding attack —
+  are now rejected, so they can't drive git/npm actions against your instance.
+- **Open Terminal** no longer builds a shell string: it spawns the terminal
+  executable directly with an argument array (no `shell:true`). The project path
+  is passed as the spawn working directory (and, where a launcher needs it, as a
+  validated literal argument) rather than composed into a shell command string.
+- **GitHub token** is no longer previewed in the settings API response (it had
+  returned the first 7 characters); it now reports only whether a token is set.
+- **Dev-server URL chip** is HTML-escaped (`safeUrl`/`escapeHtml`), consistent
+  with the rest of the app's XSS discipline.
+- **Trust model documented** — Launch / Install / Open Terminal run the target
+  repo's own scripts, so only use them on repos you trust (see README).
+
+### Added
+- **Security regression tests** locking the command-injection hardening
+  (`resolveSafeDir`, argument-array git, the terminal-run whitelist), the origin
+  guard, the `:id` validation, and the token-preview removal — the suite grew
+  from 13 to 29 tests.
+- Test suite runs against an in-memory DB via `LAUNCHPAD_DB` (never touches the
+  on-disk `launchpad.db`).
+
 ## [1.1.0] — 2026-06-14 — Stabilize + Polish
 
 ### Added

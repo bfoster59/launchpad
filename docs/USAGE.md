@@ -64,6 +64,10 @@ Click a project card to open its **detail** view, where you can:
 - **Launch** its dev server (if configured) and see the live URL.
 - View **build logs / updates**.
 
+> ⚠️ **Launch**, **Install deps**, and **Open Terminal** run the *target repo's own*
+> scripts on your machine with no sandbox — only use them on repositories you
+> trust. (See the README "Running project code — trust model" section.)
+
 ---
 
 ## 5. Icon & badge legend

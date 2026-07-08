@@ -122,7 +122,8 @@ No build step — edit `public/*` and reload.
 
 ```bash
 npm start          # run the app (node server.js) on 127.0.0.1:3020
-npm test           # node:test smoke suite (DB layer + server-loads); runs on :memory:
+npm test           # node:test suite: DB layer + security regression (origin guard,
+                   # injection hardening, token masking); runs on an in-memory DB
 ```
 
 **Layout:**
