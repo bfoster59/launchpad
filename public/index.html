@@ -645,11 +645,11 @@
             <section style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 24px;">
                 <h3 style="margin-bottom: 16px; color: var(--text);">Clone Base Directory</h3>
                 <p style="color: var(--text-muted); margin-bottom: 12px; font-size: 0.9rem;">
-                    Where new clones land. Default <code>/home/bfoster</code> resolves to <code>C:\home\bfoster\&lt;project&gt;</code> on Windows, or <code>/home/bfoster/&lt;project&gt;</code> on Linux/macOS.
+                    Where new clones land. Default is <code>&lt;your home&gt;/github</code> (e.g. <code>C:\Users\you\github</code>); each repo clones to <code>&lt;base&gt;/&lt;project&gt;</code>. Override here or via the <code>CLONE_BASE_DIR</code> env var.
                 </p>
                 <div id="cloneDirEffective" style="margin-bottom: 12px; color: var(--text); font-size: 0.9rem;"></div>
                 <div style="display: flex; gap: 8px;">
-                    <input type="text" id="settingsCloneDir" placeholder="/home/bfoster" style="flex: 1; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
+                    <input type="text" id="settingsCloneDir" placeholder="e.g. C:\Users\you\github" style="flex: 1; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
                     <button class="btn btn-primary" onclick="saveSettingsCloneDir()">Save Path</button>
                 </div>
             </section>

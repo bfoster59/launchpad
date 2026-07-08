@@ -1,37 +1,37 @@
-# LaunchPad — Iteration 1 TODO
+# LaunchPad — Iteration 1 TODO (reconciled)
 
-Resumed 2026-04-20 after a 2.5-month gap. App works; these are the gaps observed during first real use.
+> **Mostly shipped.** This is the historical iteration-1 backlog from 2026-04-20.
+> The Settings page, dual theme, favicon, keyboard shortcuts, and the Commit/Push
+> + Pull git actions have all since shipped (authoritative shipped-feature history
+> lives in **[CHANGELOG.md](CHANGELOG.md)**, v1.0.0 → v1.1.1). Only items still
+> marked `[ ]` remain open.
 
-## UX
+## Still open
 
-- [ ] **"Bulk Import" styled as a tab but invisible** — currently a transparent button with `#888` text, users mistake the active view for the only option. Promote to a real button or segmented toggle so both import modes are obviously clickable.
+- [ ] **UX: "Bulk Import" tab discoverability** — the Import modal now has Browse /
+  Import-by-URL / Bulk-Import modes; confirm the Bulk-Import option reads as clearly
+  clickable (the original complaint was a near-invisible `#888` transparent button).
+- [ ] **Optional: commit → Build Log** — auto-add a Build Log update entry per commit
+  so the detail page gains a real history view. Not wired.
 
-## Settings page (doesn't exist yet)
+## Shipped (kept for the record)
 
-- [ ] Add a Settings tab/page in the main nav
-- [x] **Persist GitHub PAT** — DONE. Stored in the SQLite `settings` table via `db.setSetting('github_pat', …)`; survives restarts.
-- [x] **Auto-load PAT on boot** — DONE. `initOctokit()` reads `db.getSetting('github_pat') || process.env.GITHUB_TOKEN` at startup, so no re-paste.
-- [ ] **Repos clone path** config (currently hardcoded or derived from cwd — check). Align with the ghq layout: `C:\Work\github.com\<user>\<repo>\`
-- [ ] "Test connection" button that pings `/user` with the saved PAT to verify scope
+**Settings page** — ✅ Settings tab in nav · ✅ persist GitHub PAT (SQLite `settings`)
+· ✅ auto-load PAT on boot (`initOctokit()`) · ✅ clone-path config (Settings → Clone
+base directory; default `~/github`, `CLONE_BASE_DIR` override) · ✅ Test-Connection
+button (`POST /api/settings/test-github` pings `/user`).
 
-## Bug fixes
+**Bug fixes** — ✅ clone-path canonical layout (base default now `~/github`,
+per-project subdir) · ✅ Edit-Project dead-end (snapshot/restore detail markup) ·
+✅ Import-by-URL uses stored auth.
 
-- [x] **Clone path updated** — `server.js:350` now uses `/home/bfoster/<project>` (drops the `projects/` middle layer), resolving to `C:\home\bfoster\<project>` on Windows, `/home/bfoster/<project>` on Linux. Canonical layout locked in 2026-04-20.
-- [x] **Edit Project dead-end fixed** — added `_editBackupHTML` module state + `_restoreDetailFromBackup()` helper + new `cancelEdit()` function in `app.js`. `editProject` now snapshots the detail container's markup before swapping in the edit form; Cancel and successful Save both restore the snapshot before `showProject()` is called, so `detailTitle`/`detailDescription`/etc. exist when showProject hydrates them. Verified in Chrome DevTools: Cancel returns to detail view, no `TypeError` in console.
-- [x] **Import by URL doesn't use auth** — DONE. The import-url route now uses `octokit || new Octokit()`, so private repos resolve when a PAT is stored.
+**Git actions** — ✅ Commit & Push (💾 button + modal; `POST /api/projects/:id/commit`)
+· ✅ Pull ff-only (⬇️ button + incoming-commits preview; `POST /api/projects/:id/pull`).
 
-## Git actions (iteration 1)
-
-- [ ] **Commit & Push button** — next to Sync Status, enabled when status is `dirty` or `unpushed`. Click opens a small modal with a commit-message field. Submit runs `git add . && git commit -m "$MSG" && git push`. Handle auth failures (bad PAT) and merge conflicts (surface as toast/alert). Keeps the loop inside launchpad so you don't have to jump to terminal for every commit.
-- [ ] **Pull button** — when status is `behind`. Runs `git pull --ff-only`, refuses non-fast-forward (surface conflict → terminal for manual resolution).
-- [ ] **Optional:** wire commit messages into the Build Log (auto-add an update entry per commit). Gives the detail page a real history view.
-
-## Nice-to-have (not blockers)
-
-- [ ] Dark/light theme toggle (currently dark-only)
-- [ ] Favicon
-- [ ] Keyboard shortcuts for tab switching
+**Nice-to-have** — ✅ dark/light theme toggle (v1.1.0, auto/light/dark) · ✅ favicon
+· ✅ keyboard shortcuts (number keys 1–6 switch tabs).
 
 ---
 
-**Context:** LaunchPad was evaluated against apptrack (Python CLI, no git history) and ProLaunch (Electron+React, MC-trap shape). LaunchPad won because vanilla JS + Express + SQLite is the minimum viable stack for "track my 38 repos + sync status at a glance." See `C:\MATRIX\active-projects.md` (TBD) for where it fits in the workflow.
+**Context:** LaunchPad = vanilla JS + Express + SQLite — the minimum viable stack for
+"track my repos + sync status at a glance."
