@@ -128,6 +128,15 @@ async function loadSettings() {
             patEl.style.color = '#f59e0b';
         }
 
+        const keyEl = document.getElementById('anthropicKeyStatus');
+        if (data.anthropic_api_key && data.anthropic_api_key.set) {
+            keyEl.textContent = 'Key is set. Enter a new value and Save to replace, or Clear to remove.';
+            keyEl.style.color = '#22c55e';
+        } else {
+            keyEl.textContent = 'No key set — AI Review falls back to the ANTHROPIC_API_KEY env var if present.';
+            keyEl.style.color = '#f59e0b';
+        }
+
         const cloneDirEl = document.getElementById('cloneDirEffective');
         cloneDirEl.textContent = `Effective path: ${data.clone_base_dir_effective}`;
         document.getElementById('settingsCloneDir').placeholder = data.clone_base_dir_effective;
@@ -171,6 +180,43 @@ async function clearSettingsPat() {
         });
         await loadSettings();
         showToast('Token cleared.');
+    } catch (e) {
+        showToast(`Error: ${e.message}`, 'error');
+    }
+}
+
+async function saveAnthropicKey() {
+    const input = document.getElementById('settingsAnthropicKey');
+    const value = input.value.trim();
+    if (!value) {
+        alert('Enter a key value (or use Clear to remove).');
+        return;
+    }
+    try {
+        const res = await fetch('/api/settings/anthropic_api_key', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ value })
+        });
+        if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+        input.value = '';
+        await loadSettings();
+        showToast('Anthropic API key saved.');
+    } catch (e) {
+        showToast(`Error: ${e.message}`, 'error');
+    }
+}
+
+async function clearAnthropicKey() {
+    if (!confirm('Clear the stored Anthropic API key?')) return;
+    try {
+        await fetch('/api/settings/anthropic_api_key', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ value: '' })
+        });
+        await loadSettings();
+        showToast('Key cleared.');
     } catch (e) {
         showToast(`Error: ${e.message}`, 'error');
     }
@@ -613,7 +659,9 @@ async function showProject(id) {
                         <div class="update-title">${escapeHtml(u.title)}</div>
                         <div class="update-time">${formatDate(u.created_at)}</div>
                     </div>
-                    ${u.content ? `<div class="update-content">${escapeHtml(u.content)}</div>` : ''}
+                    ${u.content ? (u.type === 'review'
+                        ? `<details class="review-entry"><summary>Show review</summary><div class="review-md">${renderReviewMarkdown(u.content)}</div></details>`
+                        : `<div class="update-content">${escapeHtml(u.content)}</div>`) : ''}
                 </div>
             `).join('');
         }
@@ -698,6 +746,10 @@ async function showProject(id) {
         const claudeBtn = document.getElementById('claudeCodeBtn');
         if (claudeBtn) {
             claudeBtn.style.display = currentProject.local_path ? 'inline-block' : 'none';
+        }
+        const reviewBtn = document.getElementById('reviewBtn');
+        if (reviewBtn) {
+            reviewBtn.style.display = currentProject.local_path ? 'inline-block' : 'none';
         }
 
         // Kick off running-server polling so Stop button + URL chip update live
@@ -1274,6 +1326,71 @@ function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, c => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
     })[c]);
+}
+
+// ========== AI REVIEW ==========
+
+// Minimal Markdown for AI reviews: headings, bullet/numbered lists, **bold**,
+// `code`, paragraphs. Every line is HTML-escaped BEFORE formatting is applied,
+// so model output can never inject markup.
+function renderReviewMarkdown(md) {
+    const inline = (s) => escapeHtml(s)
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    const out = [];
+    let list = null; // 'ul' | 'ol' | null
+    const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+    for (const raw of String(md || '').split(/\r?\n/)) {
+        const line = raw.trimEnd();
+        let m;
+        if ((m = line.match(/^#{1,4}\s+(.*)$/))) {
+            closeList();
+            out.push(`<h4>${inline(m[1])}</h4>`);
+        } else if ((m = line.match(/^\s*[-*]\s+(.*)$/))) {
+            if (list !== 'ul') { closeList(); out.push('<ul>'); list = 'ul'; }
+            out.push(`<li>${inline(m[1])}</li>`);
+        } else if ((m = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
+            if (list !== 'ol') { closeList(); out.push('<ol>'); list = 'ol'; }
+            out.push(`<li>${inline(m[1])}</li>`);
+        } else if (line.trim() === '') {
+            closeList();
+        } else {
+            closeList();
+            out.push(`<p>${inline(line)}</p>`);
+        }
+    }
+    closeList();
+    return out.join('');
+}
+
+async function runAiReview() {
+    if (!currentProject) return;
+    const project = currentProject;
+    const btn = document.getElementById('reviewBtn');
+    const modal = document.getElementById('reviewModal');
+    const body = document.getElementById('reviewBody');
+    document.getElementById('reviewTitle').textContent = `🧠 AI Review — ${project.name}`;
+    document.getElementById('reviewMeta').textContent = '';
+    body.innerHTML = '<div class="review-loading"><div class="review-spinner"></div>Reading the repo and asking Claude — this usually takes 30–90 seconds…</div>';
+    modal.style.display = 'block';
+    btn.disabled = true;
+    try {
+        const res = await fetch(`/api/projects/${project.id}/review`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Review failed');
+        body.innerHTML = `<div class="review-md">${renderReviewMarkdown(data.markdown)}</div>`;
+        document.getElementById('reviewMeta').textContent = `Model: ${data.model} · saved to Build Log`;
+        // Refresh the detail view so the new Build Log entry shows, if still open.
+        if (currentProject && currentProject.id === project.id) await showProject(project.id);
+    } catch (e) {
+        body.innerHTML = `<div style="color: var(--danger);">❌ ${escapeHtml(e.message)}</div>`;
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function closeReviewModal() {
+    document.getElementById('reviewModal').style.display = 'none';
 }
 
 // Sanitize a user-supplied URL before putting it in an href. Only http(s) is

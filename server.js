@@ -1,6 +1,8 @@
 const express = require('express');
 const { Octokit } = require('@octokit/rest');
 const LaunchpadDB = require('./database');
+const Anthropic = require('@anthropic-ai/sdk');
+const aiReview = require('./ai-review');
 
 const app = express();
 const PORT = 3020;
@@ -1711,6 +1713,46 @@ app.post('/api/github/token', (req, res) => {
     }
 });
 
+// ========== AI REVIEW ENDPOINT ==========
+
+// Review the project's local clone with Claude and save the result to the Build
+// Log. POST, so the global origin guard applies. Can take a minute or two.
+app.post('/api/projects/:id/review', async (req, res) => {
+    try {
+        const project = db.getProject(parseInt(req.params.id));
+        if (!project) return res.status(404).json({ error: 'Project not found' });
+
+        const dir = resolveSafeDir(project.local_path);
+        if (!dir) return res.status(400).json({ error: 'AI Review needs a local clone of this project.' });
+
+        const apiKey = db.getSetting('anthropic_api_key') || process.env.ANTHROPIC_API_KEY;
+        if (!apiKey) {
+            return res.status(400).json({ error: 'No Anthropic API key set. Add one in Settings.' });
+        }
+        const client = new Anthropic({ apiKey });
+
+        const ctx = await aiReview.gatherRepoContext(dir, runGit);
+        const { markdown, model } = await aiReview.runReview(client, project, ctx);
+
+        const update = db.addUpdate({
+            project_id: project.id,
+            type: 'review',
+            title: `AI Review (${model})`,
+            content: markdown
+        });
+        res.json({ markdown, model, updateId: update && update.id });
+    } catch (error) {
+        if (error instanceof Anthropic.AuthenticationError) {
+            return res.status(400).json({ error: 'Anthropic rejected the API key. Check it in Settings.' });
+        }
+        if (error instanceof Anthropic.RateLimitError) {
+            return res.status(429).json({ error: 'Anthropic rate limit hit. Try again in a minute.' });
+        }
+        console.error('[ai-review] failed:', error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // ========== SETTINGS ENDPOINTS ==========
 
 // Get all settings (masks github_pat — only returns a hint that it's set)
@@ -1719,7 +1761,7 @@ app.get('/api/settings', (req, res) => {
         const all = db.getAllSettings();
         const result = {};
         all.forEach(s => {
-            if (s.key === 'github_pat') {
+            if (s.key === 'github_pat' || s.key === 'anthropic_api_key') {
                 // Never return any bytes of the token — only whether one is set.
                 // A 7-char preview still leaks the token class/prefix. (Gate 3 F6)
                 result[s.key] = { set: !!s.value };
@@ -1742,7 +1784,7 @@ app.put('/api/settings/:key', (req, res) => {
     try {
         const { key } = req.params;
         const { value } = req.body;
-        const allowed = new Set(['github_pat', 'clone_base_dir', 'terminal_app', 'scan_roots']);
+        const allowed = new Set(['github_pat', 'clone_base_dir', 'terminal_app', 'anthropic_api_key', 'scan_roots']);
         if (!allowed.has(key)) {
             return res.status(400).json({ error: `Unknown setting: ${key}` });
         }
