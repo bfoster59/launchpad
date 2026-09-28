@@ -131,6 +131,10 @@ async function loadSettings() {
         const cloneDirEl = document.getElementById('cloneDirEffective');
         cloneDirEl.textContent = `Effective path: ${data.clone_base_dir_effective}`;
         document.getElementById('settingsCloneDir').placeholder = data.clone_base_dir_effective;
+
+        document.getElementById('scanRootsEffective').textContent =
+            `Searching: ${(data.scan_roots_effective || []).join('  ·  ')}`;
+        document.getElementById('settingsScanRoots').value = data.scan_roots || '';
     } catch (e) {
         console.error('loadSettings error', e);
     }
@@ -211,7 +215,7 @@ async function saveSettingsTerminal() {
 async function saveSettingsCloneDir() {
     const value = document.getElementById('settingsCloneDir').value.trim();
     if (!value) {
-        alert('Enter a path (e.g., /home/bfoster) or leave the default.');
+        alert('Enter a path (e.g., C:\\dev\\clones) or leave the default.');
         return;
     }
     try {
@@ -224,6 +228,23 @@ async function saveSettingsCloneDir() {
         document.getElementById('settingsCloneDir').value = '';
         await loadSettings();
         showToast('Clone base directory saved.');
+    } catch (e) {
+        showToast(`Error: ${e.message}`, 'error');
+    }
+}
+
+// Empty clears the setting (only the clone base is searched then).
+async function saveSettingsScanRoots() {
+    const value = document.getElementById('settingsScanRoots').value.trim();
+    try {
+        const res = await fetch('/api/settings/scan_roots', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ value })
+        });
+        if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+        await loadSettings();
+        showToast('Scan roots saved.');
     } catch (e) {
         showToast(`Error: ${e.message}`, 'error');
     }
@@ -1023,7 +1044,12 @@ function stopRunningPoll() {
 
 async function stopDevServer() {
     if (!currentProject) return;
-    if (!confirm('Stop the running dev server?')) return;
+    // Name the server being stopped — the browser titles the dialog with
+    // Launchpad's own address (localhost:3020), which reads like the target.
+    let port = '';
+    try { port = _lastDetectedUrl ? new URL(_lastDetectedUrl).port : ''; } catch (e) { /* no URL yet */ }
+    const where = port ? ` on port ${port}` : '';
+    if (!confirm(`Stop the ${currentProject.name} dev server${where}?`)) return;
     try {
         const r = await fetch(`/api/projects/${currentProject.id}/stop`, { method: 'POST' });
         const data = await r.json();
@@ -1424,10 +1450,11 @@ async function cloneProject() {
         const data = await response.json();
         
         if (!response.ok) {
-            throw new Error(data.error || 'Failed to clone');
+            const where = data.candidates ? `\n${data.candidates.join('\n')}` : '';
+            throw new Error((data.error || 'Failed to clone') + where);
         }
-        
-        showToast(`✅ Cloned to ${data.local_path}`);
+
+        showToast(data.linked ? `🔗 Linked existing clone at ${data.local_path}` : `✅ Cloned to ${data.local_path}`);
         showProject(currentProject.id); // Reload
     } catch (error) {
         showToast(`Error: ${error.message}`, 'error');
@@ -1600,6 +1627,12 @@ async function refreshLocalCloneStatus() {
         // The server may have backfilled local_path — refresh the projects array.
         await loadProjects();
         if (browseReposCache) renderBrowseFromCache();
+        // Background clones from Import: re-check until they finish so the
+        // CLONING tag flips to CLONED without reopening the modal.
+        if (Object.values(localCloneStatus).some(r => r.status === 'cloning')) {
+            clearTimeout(refreshLocalCloneStatus._timer);
+            refreshLocalCloneStatus._timer = setTimeout(refreshLocalCloneStatus, 4000);
+        }
     } catch (e) { /* non-fatal */ }
 }
 
@@ -1681,8 +1714,19 @@ const TAG_STYLES = {
     SYNCED:     { bg: '#10b981', fg: '#053024' },
     CLONED:     { bg: '#14b8a6', fg: '#042f2e' },
     'NOT CLONED': { bg: '#6b7280', fg: '#0f0f0f' },
+    CLONING:    { bg: '#8b5cf6', fg: '#1e0a3a' },
+    AMBIGUOUS:  { bg: '#f59e0b', fg: '#3a2200' },
     ERROR:      { bg: '#ef4444', fg: '#3a0a0a' }
 };
+
+// One-line summary of what Import did about a local copy (server `local` field).
+function describeLocalOutcome(local) {
+    if (!local) return 'not cloned';
+    if (local.status === 'linked') return `linked existing clone at ${local.path}`;
+    if (local.status === 'cloning') return `cloning to ${local.path}`;
+    if (local.status === 'ambiguous') return `${local.candidates.length} local copies found — set Local Path`;
+    return `not cloned (${local.reason || 'see Build Log'})`;
+}
 function chip(label) {
     const s = TAG_STYLES[label] || TAG_STYLES['NOT CLONED'];
     return { label, bg: s.bg, fg: s.fg };
@@ -1703,6 +1747,8 @@ function getBrowseTags(project, detect) {
     if (chips.length > 0) return chips; // DIRTY/AHEAD/BEHIND all imply cloned — no need to add CLONED.
     if (s === 'synced') return [chip('SYNCED')];
     if (cloned) return [chip('CLONED')];
+    if (detect && detect.status === 'cloning') return [chip('CLONING')];
+    if (detect && detect.status === 'ambiguous') return [chip('AMBIGUOUS')];
     if (s === 'error') return [chip('ERROR')];
     return [chip('NOT CLONED')];
 }
@@ -2048,7 +2094,18 @@ async function importSelectedRepos() {
             throw new Error(data.error || 'Import failed');
         }
         
-        alert(`Imported ${data.imported} projects!`);
+        const counts = {};
+        (data.projects || []).forEach(p => {
+            const s = (p.local && p.local.status) || 'skipped';
+            counts[s] = (counts[s] || 0) + 1;
+        });
+        const parts = [
+            counts.linked && `${counts.linked} linked to existing local copies`,
+            counts.cloning && `${counts.cloning} cloning into the Clone Base Directory`,
+            counts.ambiguous && `${counts.ambiguous} with several local copies (set Local Path)`,
+            counts.skipped && `${counts.skipped} not cloned (see Build Log)`,
+        ].filter(Boolean);
+        alert(`Imported ${data.imported} projects!${parts.length ? `\n\n${parts.join('\n')}` : ''}`);
         loadProjects();
         hideBulkImport();
     } catch (error) {
@@ -2601,7 +2658,8 @@ async function importGitHubRepo(url) {
         // Reload projects so the imported repo shows up in `projects`. Await so
         // the Browse re-render below sees the new row.
         await loadProjects();
-        showToast(`Imported ${data.project.name}`);
+        showToast(`Imported ${data.project.name} — ${describeLocalOutcome(data.local)}`);
+        if (data.local && data.local.status === 'cloning') refreshLocalCloneStatus();
 
         // If the Browse GitHub modal is open, re-render the list in place so the
         // tag flips from NEW → NOT CLONED (or whatever sync_status applies) and

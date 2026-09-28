@@ -655,6 +655,18 @@
             </section>
 
             <section style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 24px;">
+                <h3 style="margin-bottom: 16px; color: var(--text);">Scan Roots</h3>
+                <p style="color: var(--text-muted); margin-bottom: 12px; font-size: 0.9rem;">
+                    Folders searched (up to 5 levels deep) for repos you already have. Import and Clone link an existing copy found here, matched by GitHub URL, and only clone into the Clone Base Directory when none exists. Separate several folders with <code>;</code>. The Clone Base Directory is always searched too.
+                </p>
+                <div id="scanRootsEffective" style="margin-bottom: 12px; color: var(--text); font-size: 0.9rem;"></div>
+                <div style="display: flex; gap: 8px;">
+                    <input type="text" id="settingsScanRoots" placeholder="e.g. C:\dev" style="flex: 1; padding: 10px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; color: var(--text);">
+                    <button class="btn btn-primary" onclick="saveSettingsScanRoots()">Save Roots</button>
+                </div>
+            </section>
+
+            <section style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 24px;">
                 <h3 style="margin-bottom: 16px; color: var(--text);">Default Terminal (Open Terminal button)</h3>
                 <p style="color: var(--text-muted); margin-bottom: 12px; font-size: 0.9rem;">
                     Which terminal launchpad opens when you click <strong>💻 Open Terminal</strong> on a project. Choices depend on your OS.

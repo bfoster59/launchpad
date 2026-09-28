@@ -49,6 +49,106 @@ function getCloneBaseDir() {
     return db.getSetting('clone_base_dir') || process.env.CLONE_BASE_DIR || path.join(os.homedir(), 'github');
 }
 
+// --- Local repo discovery (see repo-scan.js) ---
+// Folders searched for existing clones before anything is cloned. Settings >
+// env (both ';'-separated) > nothing; the clone base dir is always included so
+// Launchpad's own clones are found.
+const repoScan = require('./repo-scan');
+function getScanRoots() {
+    const raw = db.getSetting('scan_roots') || process.env.SCAN_ROOTS || '';
+    const roots = raw.split(/[;\r\n]+/).map(s => s.trim()).filter(Boolean);
+    return [...roots, getCloneBaseDir()];
+}
+
+// The walk takes well under a second on a few dozen repos, but Import can fire
+// once per row — cache briefly and let callers force a fresh scan.
+const REPO_INDEX_TTL_MS = 30 * 1000;
+let repoIndexCache = { at: 0, index: null };
+function getRepoIndex({ force = false } = {}) {
+    if (force || !repoIndexCache.index || Date.now() - repoIndexCache.at > REPO_INDEX_TTL_MS) {
+        repoIndexCache = { at: Date.now(), index: repoScan.buildRepoIndex(repoScan.scanForRepos(getScanRoots())) };
+    }
+    return repoIndexCache.index;
+}
+function findLocalRepo(repoUrl, opts) {
+    return repoScan.pickLocalMatch(getRepoIndex(opts), repoUrl);
+}
+
+// Clone a GitHub repo into `targetDir`. Only a recognised github.com URL is
+// accepted, and git is handed a URL rebuilt from owner/repo — so a client-
+// supplied repo_url (file://, ext::, a flag) can never reach git. Throws an
+// Error carrying an HTTP `status` for the auth / not-found cases.
+async function cloneGitHubRepo(repoUrl, targetDir) {
+    const path = require('path');
+    const fs = require('fs');
+    const key = repoScan.repoKey(repoUrl);
+    if (!key) throw Object.assign(new Error('Only github.com repositories can be cloned'), { status: 400 });
+    fs.mkdirSync(path.dirname(targetDir), { recursive: true });
+    try {
+        await _execFileAsync('git', ['clone', '--', `https://github.com/${key}.git`, targetDir], { timeout: 300000, windowsHide: true });
+    } catch (cloneErr) {
+        const msg = (cloneErr.stderr || cloneErr.message || '').trim();
+        if (/authentication failed|could not read username|terminal prompts disabled/i.test(msg)) {
+            throw Object.assign(new Error('Authentication failed — run `gh auth login` and `gh auth setup-git` in a terminal, then retry'), { status: 401, details: msg });
+        }
+        if (/not found|repository.*does not exist|could not find remote/i.test(msg)) {
+            throw Object.assign(new Error('Repository not found or access denied on GitHub'), { status: 404, details: msg });
+        }
+        throw cloneErr;
+    }
+    // Make the new clone visible to the next lookup without waiting out the TTL.
+    repoIndexCache.at = 0;
+}
+
+// Canonical clone target for a project, or null if its name would escape the base.
+function cloneTargetFor(project) {
+    const path = require('path');
+    const baseDir = getCloneBaseDir();
+    const targetDir = path.join(baseDir, project.name);
+    const rel = path.relative(path.resolve(baseDir), path.resolve(targetDir));
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+    return targetDir;
+}
+
+// After a project is imported: link an existing local copy if there is exactly
+// one, leave it alone if there are several (the user picks), and clone into the
+// clone base only when no copy exists anywhere. The clone runs in the
+// background so a bulk import returns immediately; outcomes land in the Build
+// Log. Returns a summary: { status: 'linked'|'ambiguous'|'cloning'|'skipped', ... }.
+const cloningProjects = new Set();
+function linkOrCloneImported(project) {
+    const fs = require('fs');
+    const match = findLocalRepo(project.repo_url, { force: true });
+    if (match.status === 'found') {
+        db.updateProject(project.id, { local_path: match.path });
+        db.addUpdate({ project_id: project.id, type: 'progress', title: 'Linked existing local clone', content: `Found at ${match.path}` });
+        return { status: 'linked', path: match.path };
+    }
+    if (match.status === 'ambiguous') {
+        db.addUpdate({ project_id: project.id, type: 'progress', title: 'Several local copies found — not cloned',
+            content: `Set Local Path to the one to use:\n${match.candidates.join('\n')}` });
+        return { status: 'ambiguous', candidates: match.candidates };
+    }
+    const targetDir = cloneTargetFor(project);
+    if (!repoScan.repoKey(project.repo_url) || !targetDir) return { status: 'skipped', reason: 'not a clonable GitHub repo' };
+    if (fs.existsSync(targetDir)) {
+        db.addUpdate({ project_id: project.id, type: 'failed', title: 'Clone skipped',
+            content: `${targetDir} already exists but is not a clone of ${project.repo_url}` });
+        return { status: 'skipped', reason: 'target folder exists' };
+    }
+    cloningProjects.add(project.id);
+    cloneGitHubRepo(project.repo_url, targetDir)
+        .then(() => {
+            db.updateProject(project.id, { local_path: targetDir });
+            db.addUpdate({ project_id: project.id, type: 'progress', title: 'Cloned to local', content: `Repository cloned to ${targetDir}` });
+        })
+        .catch((err) => {
+            db.addUpdate({ project_id: project.id, type: 'failed', title: 'Clone failed', content: `${err.message}${err.details ? `\n${err.details}` : ''}` });
+        })
+        .finally(() => cloningProjects.delete(project.id));
+    return { status: 'cloning', path: targetDir };
+}
+
 initOctokit();
 
 // --- Safe process-execution helpers (Gate 3 phase 1: command-injection fix) ---
@@ -746,27 +846,38 @@ app.get('/api/local-clone-detect', requireSameOrigin, async (req, res) => {
 
         const baseDir = getCloneBaseDir();
         const all = db.getAllProjects();
+        const isRepo = (dir) => !!dir && fs.existsSync(path.join(dir, '.git'));
+        // Opening the Import modal is the natural "rescan" moment.
+        const index = getRepoIndex({ force: true });
 
         const results = {};
         await Promise.all(all.map(async (p) => {
-            // Resolve candidate path: stored local_path wins, else canonical.
-            let candidate = p.local_path;
-            let autoDetected = false;
-            if (!candidate) {
-                candidate = path.join(baseDir, p.name);
-                autoDetected = true;
+            if (cloningProjects.has(p.id)) {
+                results[p.id] = { status: 'cloning', path: null, dirty: false };
+                return;
             }
 
-            const exists = candidate && fs.existsSync(candidate);
-            const hasGit = exists && fs.existsSync(path.join(candidate, '.git'));
+            // Resolve candidate path: a stored local_path that still holds a repo
+            // wins; else the canonical clone-base path; else a scan-roots match
+            // by repo URL (this also repairs local_paths left stale by a move).
+            let candidate = isRepo(p.local_path) ? p.local_path : null;
+            if (!candidate && isRepo(path.join(baseDir, p.name))) candidate = path.join(baseDir, p.name);
+            if (!candidate && p.repo_url) {
+                const match = repoScan.pickLocalMatch(index, p.repo_url);
+                if (match.status === 'found') candidate = match.path;
+                if (match.status === 'ambiguous') {
+                    results[p.id] = { status: 'ambiguous', path: null, dirty: false, candidates: match.candidates };
+                    return;
+                }
+            }
 
-            if (!hasGit) {
+            if (!candidate) {
                 results[p.id] = { status: 'not_cloned', path: null, dirty: false };
                 return;
             }
 
-            // Detected — backfill local_path if we found a clone at the canonical location.
-            if (autoDetected && !p.local_path) {
+            // Detected somewhere other than the stored path — record where.
+            if (candidate !== p.local_path) {
                 try { db.updateProject(p.id, { local_path: candidate }); } catch (e) { /* non-fatal */ }
             }
 
@@ -1523,14 +1634,26 @@ app.post('/api/projects/:id/clone', async (req, res) => {
             return res.status(400).json({ error: 'Project has no repository URL' });
         }
         
-        // Determine target directory — Settings > env > portable default
-        // (~/github via os.homedir()). See getCloneBaseDir().
-        const baseDir = getCloneBaseDir();
-        const targetDir = path.join(baseDir, project.name);
+        // Look for an existing local copy anywhere under the scan roots first —
+        // cloning a repo that is already on disk just makes a second copy.
+        const match = findLocalRepo(project.repo_url, { force: true });
+        if (match.status === 'found') {
+            const linked = db.updateProject(project.id, { local_path: match.path });
+            db.addUpdate({ project_id: project.id, type: 'progress', title: 'Linked existing local clone', content: `Found at ${match.path}` });
+            return res.json({ success: true, linked: true, local_path: match.path, project: linked });
+        }
+        if (match.status === 'ambiguous') {
+            return res.status(409).json({
+                error: 'Several local copies of this repo exist — set Local Path to the one to use',
+                candidates: match.candidates
+            });
+        }
 
-        // Guard against a project name like '../../x' escaping the clone base.
-        const relToBase = path.relative(path.resolve(baseDir), path.resolve(targetDir));
-        if (relToBase.startsWith('..') || path.isAbsolute(relToBase)) {
+        // Determine target directory — Settings > env > portable default
+        // (~/github via os.homedir()). See getCloneBaseDir(). cloneTargetFor()
+        // rejects a project name like '../../x' escaping the clone base.
+        const targetDir = cloneTargetFor(project);
+        if (!targetDir) {
             return res.status(400).json({ error: 'Invalid project name — clone target escapes the base directory' });
         }
 
@@ -1539,35 +1662,19 @@ app.post('/api/projects/:id/clone', async (req, res) => {
         if (fs.existsSync(targetDir)) {
             return res.status(409).json({ error: 'Already cloned', local_path: targetDir });
         }
-        
+
         // Clone via plain `git clone` — auth is handled by gh-as-credential-
         // helper (configured globally via `gh auth setup-git`). No URL token
-        // injection, no per-repo credential files. fs.mkdirSync for the parent
-        // dir (Unix `mkdir -p` is not portable to Windows cmd).
-        const repoDir = path.dirname(targetDir);
-        fs.mkdirSync(repoDir, { recursive: true });
-
+        // injection, no per-repo credential files.
         try {
-            // '--' ends option parsing so a repo_url like '--upload-pack=…' can't
-            // be interpreted by git clone as a flag (argument injection).
-            await _execFileAsync('git', ['clone', '--', project.repo_url, targetDir], { timeout: 300000, windowsHide: true });
+            await cloneGitHubRepo(project.repo_url, targetDir);
         } catch (cloneErr) {
-            const msg = (cloneErr.stderr || cloneErr.message || '').trim();
-            if (/authentication failed|could not read username|terminal prompts disabled/i.test(msg)) {
-                return res.status(401).json({
-                    error: 'Authentication failed — run `gh auth login` and `gh auth setup-git` in a terminal, then retry',
-                    details: msg
-                });
-            }
-            if (/not found|repository.*does not exist|could not find remote/i.test(msg)) {
-                return res.status(404).json({
-                    error: 'Repository not found or access denied on GitHub',
-                    details: msg
-                });
+            if (cloneErr.status) {
+                return res.status(cloneErr.status).json({ error: cloneErr.message, details: cloneErr.details });
             }
             throw cloneErr;
         }
-        
+
         // Update project with local path
         const updated = db.updateProject(project.id, { local_path: targetDir });
         
@@ -1623,6 +1730,7 @@ app.get('/api/settings', (req, res) => {
         });
         // Always include derived clone base dir so the UI can show the effective value.
         result.clone_base_dir_effective = getCloneBaseDir();
+        result.scan_roots_effective = getScanRoots();
         res.json(result);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -1634,7 +1742,7 @@ app.put('/api/settings/:key', (req, res) => {
     try {
         const { key } = req.params;
         const { value } = req.body;
-        const allowed = new Set(['github_pat', 'clone_base_dir', 'terminal_app']);
+        const allowed = new Set(['github_pat', 'clone_base_dir', 'terminal_app', 'scan_roots']);
         if (!allowed.has(key)) {
             return res.status(400).json({ error: `Unknown setting: ${key}` });
         }
@@ -1645,6 +1753,7 @@ app.put('/api/settings/:key', (req, res) => {
             db.setSetting(key, value);
             if (key === 'github_pat') octokit = new Octokit({ auth: value });
         }
+        if (key === 'scan_roots' || key === 'clone_base_dir') repoIndexCache.at = 0;
         res.json({ success: true, key, effective_clone_base_dir: getCloneBaseDir() });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -1795,8 +1904,9 @@ app.post('/api/github/import-url', async (req, res) => {
             title: 'Imported from GitHub',
             content: `Imported from ${repoData.html_url}`
         });
-        
-        res.json({ success: true, project });
+
+        const local = linkOrCloneImported(project);
+        res.json({ success: true, project: db.getProject(project.id), local });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -1842,9 +1952,10 @@ app.post('/api/github/import', async (req, res) => {
                 });
             }
             
-            imported.push(project);
+            const local = linkOrCloneImported(project);
+            imported.push({ ...db.getProject(project.id), local });
         }
-        
+
         res.json({
             imported: imported.length,
             projects: imported
