@@ -13,6 +13,5 @@ _fix-*.js
 
 .remember/
 
-# internal dev artifacts — kept in FOREMAN central, never in the product repo
-foreman/
+# internal dev artifacts — never in the product repo
 docs/superpowers/
