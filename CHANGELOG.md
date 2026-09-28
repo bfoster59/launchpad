@@ -2,6 +2,16 @@
 
 All notable changes to LaunchPad. Format loosely based on [Keep a Changelog](https://keepachangelog.com/). This project is local-only (not published to npm).
 
+## [Unreleased]
+
+### Added
+- **🧠 AI Review button** on the project detail page. Sends a bounded snapshot of the
+  local clone (README/CLAUDE/TODO/CHANGELOG, manifests, file names, last 20 commits)
+  to Claude Opus 5 and shows a structured review (verdict + score, current state,
+  strengths, risks, next 3 actions). Each review is saved to the Build Log.
+  Uses server-side refusal fallback. New `anthropic_api_key` setting (masked in the
+  settings API like the GitHub token), with `ANTHROPIC_API_KEY` as fallback.
+
 ## [1.1.1] — 2026-07-07 — Security stabilization
 
 A follow-up deep review of v1.1.0 found that the shell-executing endpoints had no

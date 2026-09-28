@@ -136,3 +136,40 @@ test('GET /api/settings never returns any bytes of the stored token', async () =
     assert.strictEqual(parsed.github_pat.set, true);
     assert.strictEqual(parsed.github_pat.preview, undefined);
 });
+
+// ---- AI Review route ----
+
+test('cross-origin POST to /review is rejected with 403', async () => {
+    const res = await request({
+        method: 'POST', path: '/api/projects/1/review',
+        headers: { host: guardHost(), origin: 'http://evil.example.com' },
+    });
+    assert.strictEqual(res.status, 403);
+});
+
+test('/review on a missing project returns 404', async () => {
+    const res = await request({ method: 'POST', path: '/api/projects/999999/review', headers: sameOrigin() });
+    assert.strictEqual(res.status, 404);
+});
+
+test('/review without a local clone returns 400 and never calls Claude', async () => {
+    const created = await request({
+        method: 'POST', path: '/api/projects', headers: sameOrigin(), body: { name: 'NoClone' },
+    });
+    const id = JSON.parse(created.body).id;
+    const res = await request({ method: 'POST', path: `/api/projects/${id}/review`, headers: sameOrigin() });
+    assert.strictEqual(res.status, 400);
+    assert.match(JSON.parse(res.body).error, /local clone/);
+});
+
+test('GET /api/settings never returns any bytes of the Anthropic key', async () => {
+    const key = 'sk-ant-TESTONLYkey1234567890abcdef';
+    const set = await request({
+        method: 'PUT', path: '/api/settings/anthropic_api_key',
+        headers: sameOrigin(), body: { value: key },
+    });
+    assert.strictEqual(set.status, 200);
+    const res = await request({ method: 'GET', path: '/api/settings' });
+    assert.ok(!res.body.includes('sk-ant-'), 'settings response must not contain the key or its prefix');
+    assert.strictEqual(JSON.parse(res.body).anthropic_api_key.set, true);
+});
