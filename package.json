@@ -1,6 +1,6 @@
 {
   "name": "launchpad",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "private": true,
   "description": "Entrepreneur's project tracker & GitHub discovery platform (Node/Express + SQLite)",
   "main": "server.js",

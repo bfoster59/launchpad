@@ -70,6 +70,52 @@ test('caps the file tree and the total prompt size', async () => {
     assert.ok(prompt.includes('[snapshot truncated]'));
 });
 
+test('never follows a symlinked doc/manifest out of the repo', async (t) => {
+    const outside = tempRepo({ 'secret.txt': 'PRIVATE-KEY-MATERIAL' });
+    const dir = tempRepo({ 'package.json': '{"name":"ok"}' });
+    try {
+        fs.symlinkSync(path.join(outside, 'secret.txt'), path.join(dir, 'README.md'), 'file');
+    } catch (e) {
+        // Creating symlinks on Windows needs Developer Mode / admin.
+        t.skip(`cannot create symlinks here (${e.code})`);
+        return;
+    }
+    const ctx = await gatherRepoContext(dir, null);
+    assert.deepStrictEqual(ctx.docs, [], 'symlinked README must not be read');
+    const prompt = buildReviewPrompt({ name: 'X' }, ctx);
+    assert.ok(!prompt.includes('PRIVATE-KEY-MATERIAL'));
+});
+
+test('redacts known secret formats from file contents before sending', async () => {
+    const dir = tempRepo({
+        'CLAUDE.md': [
+            'anthropic sk-ant-api03-AbCdEf0123456789AbCdEf0123456789xyz',
+            'github ghp_0123456789abcdefghijABCDEFGHIJ012345',
+            'fine-grained github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz0123',
+            'aws AKIAIOSFODNN7EXAMPLE',
+            'slack xoxb-123456789012-abcdefghijkl',
+            '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAA\n-----END OPENSSH PRIVATE KEY-----',
+            'Normal prose stays.'
+        ].join('\n')
+    });
+    const ctx = await gatherRepoContext(dir, null);
+    const prompt = buildReviewPrompt({ name: 'X' }, ctx);
+    for (const leaked of ['sk-ant-api03-AbCd', 'ghp_0123', 'github_pat_11AB', 'AKIAIOSFODNN7EXAMPLE', 'xoxb-1234', 'b3BlbnNzaC1rZXktdjEAAAA']) {
+        assert.ok(!prompt.includes(leaked), `must redact ${leaked}`);
+    }
+    assert.ok(prompt.includes('[REDACTED]'));
+    assert.ok(prompt.includes('Normal prose stays.'));
+});
+
+test('strips credentials embedded in the repo URL from the prompt', () => {
+    const prompt = buildReviewPrompt(
+        { name: 'X', repo_url: 'https://someone:tok3n-value@github.com/me/x.git' },
+        { docs: [], manifests: [], tree: [], gitLog: null }
+    );
+    assert.ok(!prompt.includes('tok3n-value'));
+    assert.ok(prompt.includes('https://github.com/me/x.git'));
+});
+
 function stubClient(message, captured) {
     return {
         beta: {

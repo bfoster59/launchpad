@@ -65,6 +65,22 @@ test('scanForRepos finds nested repos, skips node_modules, hidden dirs and too-d
     ]);
 });
 
+test('scanForRepos finds a repo whose folder is named like a build dir, but not repos inside one', () => {
+    const r2 = fs.mkdtempSync(path.join(os.tmpdir(), 'launchpad-scan2-'));
+    try {
+        const mk = (rel, url) => {
+            fs.mkdirSync(path.join(r2, rel, '.git'), { recursive: true });
+            fs.writeFileSync(path.join(r2, rel, '.git', 'config'), `[remote "origin"]\n\turl = ${url}\n`);
+        };
+        mk('tools/build', 'https://github.com/me/build.git');
+        mk('app/dist/vendored-copy', 'https://github.com/me/vendored.git');
+        const found = scanForRepos([r2]).map(r => r.key).sort();
+        assert.deepStrictEqual(found, ['me/build']);
+    } finally {
+        fs.rmSync(r2, { recursive: true, force: true });
+    }
+});
+
 test('scanForRepos tolerates missing roots and duplicate roots', () => {
     const found = scanForRepos([path.join(root, 'nope'), root, root], { maxDepth: 5 });
     assert.strictEqual(found.length, 5);

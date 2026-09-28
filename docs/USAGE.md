@@ -12,6 +12,7 @@ How to operate LaunchPad, task by task. For install/config see the [README](../R
    - **Settings → GitHub Personal Access Token** → paste a token (`repo` scope) → **Save Token** → **Test Connection** should show `✅ Connected as @you`.
    - One-time, in a terminal: `gh auth setup-git` (lets clone/pull/push work without prompts).
 4. Optionally set **Settings → Clone base directory** (where imported repos clone to; default `~/github`).
+5. Set **Settings → Scan Roots** to the folder(s) that already hold your repos (e.g. `C:\dev`) so Import links them instead of cloning duplicates.
 
 ---
 
@@ -36,6 +37,17 @@ Open **GitHub → Import from GitHub**. Three modes (tabs in the dialog):
 - **Bulk Import** — import many of your repos at once.
 
 Imported repos show up as projects and gain **sync status** tracking.
+
+**What happens to the local copy on import** (also what **Clone to Local** does):
+
+| On disk under your Scan Roots | Result | Tag |
+|---|---|---|
+| Exactly one copy (matched by GitHub URL, any folder name) | Linked — Local Path set to it, nothing cloned | CLONED / DIRTY |
+| One live copy plus copies under `archive` / `backup` / `dead` | The live copy is linked | CLONED / DIRTY |
+| Several live copies | Nothing linked or cloned; the Build Log lists them — **Edit → Local Path** to choose | AMBIGUOUS |
+| No copy | Cloned into `<Clone base>\<name>` in the background (2 at a time) | CLONING → CLONED |
+
+Opening the Import dialog also fills in Local Paths that are empty or point at a folder that no longer exists. A Local Path that still exists is never changed.
 
 ---
 
@@ -86,6 +98,7 @@ Click a project card to open its **detail** view, where you can:
 |---|---|
 | **GitHub Personal Access Token** | GitHub API access (import / discover / sync). `Test Connection` verifies it. |
 | **Clone base directory** | Where new clones land (default `~/github`). |
+| **Scan Roots** | Folders searched (5 levels deep) for repos you already have; `;` between several. The clone base is always searched too. |
 | **Default terminal** | Which terminal "Open Terminal" launches. |
 
 All settings persist locally in SQLite and apply immediately.

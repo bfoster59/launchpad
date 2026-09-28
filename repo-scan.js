@@ -87,9 +87,12 @@ function scanForRepos(roots, { maxDepth = 5 } = {}) {
             let entries;
             try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { continue; }
             for (const ent of entries) {
-                if (!ent.isDirectory()) continue;
-                if (ent.name.startsWith('.') || SKIP_DIRS.has(ent.name.toLowerCase())) continue;
-                queue.push([path.join(dir, ent.name), depth + 1]);
+                if (!ent.isDirectory() || ent.name.startsWith('.')) continue;
+                const child = path.join(dir, ent.name);
+                // A repo that happens to be named `build`/`bin`/… is still a
+                // repo; only non-repo folders with those names are skipped.
+                if (SKIP_DIRS.has(ent.name.toLowerCase()) && !fs.existsSync(path.join(child, '.git'))) continue;
+                queue.push([child, depth + 1]);
             }
         }
     }

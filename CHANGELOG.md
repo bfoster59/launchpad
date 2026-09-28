@@ -2,7 +2,7 @@
 
 All notable changes to LaunchPad. Format loosely based on [Keep a Changelog](https://keepachangelog.com/). This project is local-only (not published to npm).
 
-## [Unreleased]
+## [1.2.0] — 2026-09-28 — AI Review + find-before-clone
 
 ### Added
 - **🧠 AI Review button** on the project detail page. Sends a bounded snapshot of the
@@ -11,6 +11,36 @@ All notable changes to LaunchPad. Format loosely based on [Keep a Changelog](htt
   strengths, risks, next 3 actions). Each review is saved to the Build Log.
   Uses server-side refusal fallback. New `anthropic_api_key` setting (masked in the
   settings API like the GitHub token), with `ANTHROPIC_API_KEY` as fallback.
+- **Find existing clones before cloning.** New **Scan Roots** setting (e.g. `C:\dev`;
+  `;`-separated; `SCAN_ROOTS` env). LaunchPad walks those folders (5 levels deep),
+  reads each repo's origin from `.git/config`, and matches by GitHub owner/repo —
+  not folder name. Import (Browse / by URL / Bulk) and **Clone to Local** now:
+  - **link** the one existing local copy when there is exactly one (a live copy
+    beats one under `archive` / `backup` / `dead`);
+  - **stop** and list the candidates when several copies exist (set Local Path);
+  - **clone into the Clone Base Directory** only when no local copy exists —
+    in the background (max 2 at a time), with **CLONING** → **CLONED** tags.
+- Opening the Import dialog fills in empty or stale (moved/deleted) Local Paths
+  from the scan. A Local Path that still exists is never replaced.
+- Stop-server confirmation names the project and port ("Stop the X dev server on
+  port 5000?") — the browser's dialog title shows LaunchPad's own port.
+
+### Security
+- **Clone accepts only github.com repos** and hands git a URL rebuilt from
+  owner/repo, so a client-supplied `repo_url` (`file://`, `ext::`, a flag) can
+  never reach git.
+- **AI Review** never follows a symlinked doc/manifest or a path that leaves the
+  repo, redacts known key formats (Anthropic, OpenAI, GitHub, AWS, Slack, private
+  keys) from file text before sending, and strips credentials from the repo URL.
+
+### Fixed (post-merge inspection of the unreleased work)
+- Deleting a project while its background clone ran could crash the server.
+- Import could overwrite a hand-set Local Path (monorepo subfolder, non-git folder).
+- A same-named folder in the clone base could be linked as the wrong repo.
+- Repos in folders named `build` / `bin` / `dist` / … were never found.
+- Bulk import rescanned the disk per row and started every clone at once.
+
+Tests: 38 → 60.
 
 ## [1.1.1] — 2026-07-07 — Security stabilization
 

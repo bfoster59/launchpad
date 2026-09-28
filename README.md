@@ -33,10 +33,11 @@
 - **📊 Dashboard** — recent projects and active builds at a glance, with live counts (Total / Building / Launched).
 - **📁 My Projects** — full CRUD; capture a project's vision, stack, status, and entry-points in the "Build Room" form.
 - **🐙 GitHub** — bulk-import repos from your account, import a single repo by URL, and watch per-repo **sync status** (synced / ahead / behind / dirty).
+- **🔗 Find before clone** — Import and Clone first search your **Scan Roots** (e.g. `C:\dev`) for a copy you already have, matched by GitHub URL rather than folder name. One copy → linked; several → you pick; none → cloned into the Clone Base Directory in the background.
 - **🔍 Explore** — discover trending GitHub projects and templates.
 - **🎓 Learn** — an interactive GitHub/dev-workflow bootcamp with levels, badges, and quizzes.
-- **🧠 AI Review** — one click on a project with a local clone: Claude Opus 5 reads the README, manifests, file tree and recent commits and returns a scored verdict, risks and next 3 actions. Saved to the project's Build Log. Needs an Anthropic API key (Settings, or the `ANTHROPIC_API_KEY` env var); only file *names* plus a fixed set of docs/manifests are sent — never `.env` or other file contents.
-- **⚙️ Settings** — GitHub token, Anthropic API key, clone base directory, and terminal preferences.
+- **🧠 AI Review** — one click on a project with a local clone: Claude Opus 5 reads the README, manifests, file tree and recent commits and returns a scored verdict, risks and next 3 actions. Saved to the project's Build Log. Needs an Anthropic API key (Settings, or the `ANTHROPIC_API_KEY` env var); only file *names* plus a fixed set of docs/manifests are sent — never `.env` or other file contents, never a symlinked file, and known key formats are redacted first. Each click is a paid API call, and closing the dialog does not cancel it.
+- **⚙️ Settings** — GitHub token, Anthropic API key, clone base directory, scan roots, and terminal preferences.
 - **🌗 Dual theme** — light / dark / auto (follows your OS), with a persistent toggle.
 
 For step-by-step task instructions, see the **[Usage guide / SWI → `docs/USAGE.md`](docs/USAGE.md)**.
@@ -76,6 +77,7 @@ All settings live in the local SQLite DB (Settings page) — no cloud sync.
 |---|---|---|
 | **GitHub PAT** | GitHub API access | Settings page, or `GITHUB_TOKEN` env |
 | **Clone base directory** | where new clones land | `~/github`; override via Settings or `CLONE_BASE_DIR` env |
+| **Scan roots** | folders searched for repos you already have before anything is cloned | clone base only; set via Settings or `SCAN_ROOTS` env (`;`-separated) |
 | **Default terminal** | which terminal "Open Terminal" launches | Settings page; platform default otherwise |
 | **Theme** | light / dark / auto | header toggle (🖥️/☀️/🌙); persisted in your browser |
 | **`HOST`** | bind address | `127.0.0.1` (loopback). Do **not** set `0.0.0.0` — the app has no auth. |

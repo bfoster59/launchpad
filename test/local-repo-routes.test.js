@@ -114,6 +114,89 @@ test('Clone to Local links an existing copy instead of cloning', async () => {
     assert.ok(!fs.existsSync(path.join(cloneBase, 'gamma')));
 });
 
+// --- Hotfix regressions (post-merge inspection, 2026-09-28) ---
+
+// A stub clone runner whose clones finish only when the test says so.
+function pendingCloneRunner() {
+    const calls = [];
+    const runner = (url, dir) => new Promise((resolve, reject) => calls.push({ url, dir, resolve, reject }));
+    return { runner, calls };
+}
+const tick = () => new Promise((r) => setTimeout(r, 20));
+const projectId = (res) => (res.body.project || res.body).id;
+
+test('deleting a project mid-clone does not crash the server or leak a rejection', async () => {
+    const rejections = [];
+    const onRejection = (e) => rejections.push(e);
+    process.on('unhandledRejection', onRejection);
+    const { runner, calls } = pendingCloneRunner();
+    app.setCloneRunner(runner);
+    try {
+        const res = await request('POST', '/api/github/import', { repos: [repo('zeta'), repo('eta')] });
+        const [zeta, eta] = res.body.projects;
+        assert.strictEqual(zeta.local.status, 'cloning');
+        assert.strictEqual(calls.length, 2);
+        await request('DELETE', `/api/projects/${zeta.id}`);
+        await request('DELETE', `/api/projects/${eta.id}`);
+        calls[0].resolve();                          // success path after delete
+        calls[1].reject(new Error('network down'));  // failure path after delete
+        await tick();
+        assert.deepStrictEqual(rejections, []);
+        const alive = await request('GET', '/api/settings');
+        assert.strictEqual(alive.status, 200);
+    } finally {
+        process.off('unhandledRejection', onRejection);
+        app.setCloneRunner(null);
+    }
+});
+
+test('background clones run at most two at a time; same-named repos never share a folder', async () => {
+    const { runner, calls } = pendingCloneRunner();
+    app.setCloneRunner(runner);
+    try {
+        const res = await request('POST', '/api/github/import', {
+            repos: [repo('q1'), repo('q2'), repo('q3'),
+                { name: 'dupname', html_url: 'https://github.com/owner-a/dupname' },
+                { name: 'dupname', html_url: 'https://github.com/owner-b/dupname' }],
+        });
+        const statuses = res.body.projects.map(p => p.local.status);
+        assert.deepStrictEqual(statuses, ['cloning', 'cloning', 'cloning', 'cloning', 'skipped']);
+        assert.strictEqual(calls.length, 2, 'only two git clones start immediately');
+        assert.strictEqual(app.cloneQueueState().queued, 2);
+
+        // Clone to Local on a project still cloning says so instead of "Already cloned".
+        const busy = await request('POST', `/api/projects/${res.body.projects[3].id}/clone`);
+        assert.strictEqual(busy.status, 409);
+        assert.match(busy.body.error, /in progress/);
+
+        for (let i = 0; i < 4; i++) { calls[i].resolve(); await tick(); }
+        assert.strictEqual(calls.length, 4);
+        assert.deepStrictEqual(app.cloneQueueState(), { active: 0, queued: 0, cloning: [] });
+    } finally {
+        app.setCloneRunner(null);
+    }
+});
+
+test('local-clone-detect never replaces a stored local_path that still exists', async () => {
+    const mono = fakeRepo(path.join(scanRoot, 'mono'), 'https://github.com/tester/mono.git');
+    const sub = path.join(mono, 'packages', 'pkgA');
+    fs.mkdirSync(sub, { recursive: true });
+    const created = await request('POST', '/api/projects', { name: 'pkgA', repo_url: 'https://github.com/tester/mono', local_path: sub });
+    const id = projectId(created);
+    await request('GET', '/api/local-clone-detect');
+    const after = await request('GET', `/api/projects/${id}`);
+    assert.strictEqual((after.body.project || after.body).local_path, sub);
+});
+
+test('local-clone-detect does not link a same-named clone of a different repo', async () => {
+    fakeRepo(path.join(cloneBase, 'utils'), 'https://github.com/someone-else/utils.git');
+    const mine = fakeRepo(path.join(scanRoot, 'active', 'my-utils'), 'https://github.com/tester/utils.git');
+    const created = await request('POST', '/api/projects', { name: 'utils', repo_url: 'https://github.com/tester/utils' });
+    const id = projectId(created);
+    const res = await request('GET', '/api/local-clone-detect');
+    assert.strictEqual(res.body.results[id].path, mine);
+});
+
 test('local-clone-detect repairs a stale local_path from the scan and reports ambiguity', async () => {
     const created = await request('POST', '/api/projects', {
         name: 'delta', repo_url: 'https://github.com/tester/delta', local_path: path.join(root, 'moved-away', 'delta'),

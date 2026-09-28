@@ -3,7 +3,8 @@
 // exported for tests; runReview is the only function that touches the network.
 //
 // Safety: only reads a fixed allowlist of doc/manifest files plus file NAMES from
-// the tree. Never reads .env or other arbitrary file contents.
+// the tree. Never reads .env or other arbitrary file contents, never follows a
+// symlink or a path out of the repo, and redacts known key formats.
 const fs = require('fs');
 const path = require('path');
 
@@ -28,13 +29,41 @@ const SKIP_DIRS = new Set([
     '__pycache__', 'target', 'coverage', '.cache'
 ]);
 
-function readCapped(file, max) {
+// High-confidence credential shapes, blanked before any file text leaves the
+// machine. Not a general secret scanner — a backstop for the allowlisted docs
+// (CLAUDE.md, Dockerfile, …) that sometimes carry a pasted key.
+const SECRET_PATTERNS = [
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+    /\bsk-ant-[A-Za-z0-9_-]{20,}/g,
+    /\bsk-[A-Za-z0-9_-]{32,}/g,
+    /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}/g,
+    /\bgithub_pat_[A-Za-z0-9_]{40,}/g,
+    /\bAKIA[0-9A-Z]{16}\b/g,
+    /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
+];
+function redactSecrets(text) {
+    return SECRET_PATTERNS.reduce((t, re) => t.replace(re, '[REDACTED]'), text);
+}
+
+// Read a repo file for the prompt. Refuses symlinks and anything whose real
+// path leaves the repo, so a committed `README.md -> ../../.ssh/id_rsa` can't
+// upload the target. Returns redacted, capped text, or null.
+function readCapped(file, max, root) {
     try {
-        const text = fs.readFileSync(file, 'utf-8');
+        if (fs.lstatSync(file).isSymbolicLink()) return null;
+        const realRoot = fs.realpathSync(root);
+        const rel = path.relative(realRoot, fs.realpathSync(file));
+        if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+        const text = redactSecrets(fs.readFileSync(file, 'utf-8'));
         return text.length > max ? `${text.slice(0, max)}\n... [truncated]` : text;
     } catch (e) {
         return null;
     }
+}
+
+// Drop any user:token@ from a repo URL before it goes into the prompt.
+function stripUrlCredentials(url) {
+    return String(url).replace(/^([a-z][a-z0-9+.-]*:\/\/)[^@\/\s]+@/i, '$1');
 }
 
 // Breadth-first walk of file names (no contents), used when git is unavailable.
@@ -66,12 +95,12 @@ async function gatherRepoContext(dir, runGit) {
 
     for (const spellings of DOC_FILES) {
         for (const name of spellings) {
-            const text = readCapped(path.join(dir, name), MAX_DOC_CHARS);
+            const text = readCapped(path.join(dir, name), MAX_DOC_CHARS, dir);
             if (text !== null) { ctx.docs.push({ name, text }); break; }
         }
     }
     for (const name of MANIFEST_FILES) {
-        const text = readCapped(path.join(dir, name), MAX_DOC_CHARS);
+        const text = readCapped(path.join(dir, name), MAX_DOC_CHARS, dir);
         if (text !== null) ctx.manifests.push({ name, text });
     }
 
@@ -136,7 +165,7 @@ function buildReviewPrompt(project, ctx) {
         project.category && `Category: ${project.category}`,
         project.tech_stack && `Tech stack (user-entered): ${project.tech_stack}`,
         project.target_market && `Target market: ${project.target_market}`,
-        project.repo_url && `Repo: ${project.repo_url}`,
+        project.repo_url && `Repo: ${stripUrlCredentials(project.repo_url)}`,
         ctx.gitStatus && `Working tree: ${ctx.gitStatus}`
     ].filter(Boolean).join('\n');
 

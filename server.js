@@ -117,10 +117,54 @@ function cloneTargetFor(project) {
 // clone base only when no copy exists anywhere. The clone runs in the
 // background so a bulk import returns immediately; outcomes land in the Build
 // Log. Returns a summary: { status: 'linked'|'ambiguous'|'cloning'|'skipped', ... }.
+// Background clones go through a small queue: at most MAX_PARALLEL_CLONES git
+// processes at once (a 100-repo import must not fork 100 clones), and never two
+// into the same folder (same-named repos from different owners).
+const MAX_PARALLEL_CLONES = 2;
 const cloningProjects = new Set();
-function linkOrCloneImported(project) {
+const cloningTargets = new Set();
+const cloneQueue = [];
+let activeClones = 0;
+let runClone = cloneGitHubRepo; // swapped by tests via app._test.setCloneRunner
+const targetKey = (dir) => { const p = require('path').resolve(dir); return process.platform === 'win32' ? p.toLowerCase() : p; };
+
+// Build-log writes for a clone that may outlive its project: the user can
+// delete the project mid-clone, and the FK on updates.project_id would then
+// throw. Skip silently if the project is gone; never let a write escape.
+function recordIfProjectExists(projectId, write) {
+    try {
+        if (db.getProject(projectId)) write();
+    } catch (e) {
+        console.error(`[clone] could not record outcome for project ${projectId}: ${e.message}`);
+    }
+}
+
+function pumpCloneQueue() {
+    while (activeClones < MAX_PARALLEL_CLONES && cloneQueue.length) {
+        const { project, targetDir } = cloneQueue.shift();
+        activeClones++;
+        Promise.resolve()
+            .then(() => runClone(project.repo_url, targetDir))
+            .then(() => recordIfProjectExists(project.id, () => {
+                db.updateProject(project.id, { local_path: targetDir });
+                db.addUpdate({ project_id: project.id, type: 'progress', title: 'Cloned to local', content: `Repository cloned to ${targetDir}` });
+            }))
+            .catch((err) => recordIfProjectExists(project.id, () => {
+                db.addUpdate({ project_id: project.id, type: 'failed', title: 'Clone failed', content: `${err.message}${err.details ? `\n${err.details}` : ''}` });
+            }))
+            .finally(() => {
+                activeClones--;
+                cloningProjects.delete(project.id);
+                cloningTargets.delete(targetKey(targetDir));
+                pumpCloneQueue();
+            });
+    }
+}
+
+// `index` lets a bulk import scan the disk once for all rows.
+function linkOrCloneImported(project, index = getRepoIndex({ force: true })) {
     const fs = require('fs');
-    const match = findLocalRepo(project.repo_url, { force: true });
+    const match = repoScan.pickLocalMatch(index, project.repo_url);
     if (match.status === 'found') {
         db.updateProject(project.id, { local_path: match.path });
         db.addUpdate({ project_id: project.id, type: 'progress', title: 'Linked existing local clone', content: `Found at ${match.path}` });
@@ -133,23 +177,23 @@ function linkOrCloneImported(project) {
     }
     const targetDir = cloneTargetFor(project);
     if (!repoScan.repoKey(project.repo_url) || !targetDir) return { status: 'skipped', reason: 'not a clonable GitHub repo' };
-    if (fs.existsSync(targetDir)) {
+    if (fs.existsSync(targetDir) || cloningTargets.has(targetKey(targetDir))) {
         db.addUpdate({ project_id: project.id, type: 'failed', title: 'Clone skipped',
-            content: `${targetDir} already exists but is not a clone of ${project.repo_url}` });
+            content: `${targetDir} already exists (or another import is cloning into it) and is not a clone of ${project.repo_url}` });
         return { status: 'skipped', reason: 'target folder exists' };
     }
     cloningProjects.add(project.id);
-    cloneGitHubRepo(project.repo_url, targetDir)
-        .then(() => {
-            db.updateProject(project.id, { local_path: targetDir });
-            db.addUpdate({ project_id: project.id, type: 'progress', title: 'Cloned to local', content: `Repository cloned to ${targetDir}` });
-        })
-        .catch((err) => {
-            db.addUpdate({ project_id: project.id, type: 'failed', title: 'Clone failed', content: `${err.message}${err.details ? `\n${err.details}` : ''}` });
-        })
-        .finally(() => cloningProjects.delete(project.id));
+    cloningTargets.add(targetKey(targetDir));
+    cloneQueue.push({ project, targetDir });
+    pumpCloneQueue();
     return { status: 'cloning', path: targetDir };
 }
+
+// Last-resort net: a stray rejection must log, not take the server down
+// (Node exits on unhandled rejections by default).
+process.on('unhandledRejection', (err) => {
+    console.error('[unhandledRejection]', err && err.stack ? err.stack : err);
+});
 
 initOctokit();
 
@@ -859,27 +903,39 @@ app.get('/api/local-clone-detect', requireSameOrigin, async (req, res) => {
                 return;
             }
 
-            // Resolve candidate path: a stored local_path that still holds a repo
-            // wins; else the canonical clone-base path; else a scan-roots match
-            // by repo URL (this also repairs local_paths left stale by a move).
-            let candidate = isRepo(p.local_path) ? p.local_path : null;
-            if (!candidate && isRepo(path.join(baseDir, p.name))) candidate = path.join(baseDir, p.name);
-            if (!candidate && p.repo_url) {
-                const match = repoScan.pickLocalMatch(index, p.repo_url);
-                if (match.status === 'found') candidate = match.path;
-                if (match.status === 'ambiguous') {
-                    results[p.id] = { status: 'ambiguous', path: null, dirty: false, candidates: match.candidates };
+            // A stored local_path that still exists is the user's choice (it may
+            // be a monorepo subfolder, a non-git folder, a deliberate pick among
+            // duplicates) — report on it, never replace it.
+            const storedExists = !!p.local_path && fs.existsSync(p.local_path);
+            let candidate = null;
+            if (storedExists) {
+                if (!isRepo(p.local_path)) {
+                    results[p.id] = { status: 'not_cloned', path: null, dirty: false };
                     return;
                 }
-            }
-
-            if (!candidate) {
-                results[p.id] = { status: 'not_cloned', path: null, dirty: false };
-                return;
-            }
-
-            // Detected somewhere other than the stored path — record where.
-            if (candidate !== p.local_path) {
+                candidate = p.local_path;
+            } else {
+                // Empty or stale (folder moved/deleted): find it by repo URL
+                // first, then the canonical clone-base folder — but only if that
+                // folder really is a clone of this repo, not a same-named one.
+                const wantKey = repoScan.repoKey(p.repo_url);
+                if (wantKey) {
+                    const match = repoScan.pickLocalMatch(index, p.repo_url);
+                    if (match.status === 'found') candidate = match.path;
+                    if (match.status === 'ambiguous') {
+                        results[p.id] = { status: 'ambiguous', path: null, dirty: false, candidates: match.candidates };
+                        return;
+                    }
+                }
+                const canonical = cloneTargetFor(p);
+                if (!candidate && canonical && isRepo(canonical)
+                    && (!p.repo_url || repoScan.repoKey(repoScan.readOriginUrl(canonical)) === wantKey)) {
+                    candidate = canonical;
+                }
+                if (!candidate) {
+                    results[p.id] = { status: 'not_cloned', path: null, dirty: false };
+                    return;
+                }
                 try { db.updateProject(p.id, { local_path: candidate }); } catch (e) { /* non-fatal */ }
             }
 
@@ -1635,7 +1691,11 @@ app.post('/api/projects/:id/clone', async (req, res) => {
         if (!project.repo_url) {
             return res.status(400).json({ error: 'Project has no repository URL' });
         }
-        
+
+        if (cloningProjects.has(project.id)) {
+            return res.status(409).json({ error: 'A clone of this project is already in progress' });
+        }
+
         // Look for an existing local copy anywhere under the scan roots first —
         // cloning a repo that is already on disk just makes a second copy.
         const match = findLocalRepo(project.repo_url, { force: true });
@@ -1963,7 +2023,9 @@ app.post('/api/github/import', async (req, res) => {
         }
         
         const imported = [];
-        
+        // One disk scan for the whole batch, not one per row.
+        let index = null;
+
         for (const repoData of repos) {
             // Check if project already exists by repo_url
             const existing = db.getAllProjects().find(p => p.repo_url === repoData.html_url);
@@ -1994,7 +2056,8 @@ app.post('/api/github/import', async (req, res) => {
                 });
             }
             
-            const local = linkOrCloneImported(project);
+            if (!index) index = getRepoIndex({ force: true });
+            const local = linkOrCloneImported(project, index);
             imported.push({ ...db.getProject(project.id), local });
         }
 
@@ -2244,3 +2307,7 @@ module.exports.resolveSafeDir = resolveSafeDir;
 module.exports.runGit = runGit;
 module.exports.sanitizeTerminalRunCommand = sanitizeTerminalRunCommand;
 module.exports.ALLOWED_TERMINAL_RUN = ALLOWED_TERMINAL_RUN;
+// Background-clone seams: swap the git clone for a stub (no network in tests)
+// and inspect the queue.
+module.exports.setCloneRunner = (fn) => { runClone = fn || cloneGitHubRepo; };
+module.exports.cloneQueueState = () => ({ active: activeClones, queued: cloneQueue.length, cloning: [...cloningProjects] });
