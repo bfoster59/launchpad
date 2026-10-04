@@ -81,6 +81,9 @@ All settings live in the local SQLite DB (Settings page) — no cloud sync.
 | **Default terminal** | which terminal "Open Terminal" launches | Settings page; platform default otherwise |
 | **Theme** | light / dark / auto | header toggle (🖥️/☀️/🌙); persisted in your browser |
 | **`HOST`** | bind address | `127.0.0.1` (loopback). Do **not** set `0.0.0.0` — the app has no auth. |
+| **`PUBLIC_ORIGIN`** | trusted external origin when using a private HTTPS reverse proxy | unset; for example `https://launchpad.example.ts.net:8443` |
+
+When using a private reverse proxy such as Tailscale Serve, keep LaunchPad bound to loopback and set `PUBLIC_ORIGIN` to the complete external HTTPS origin, including its port when applicable. Do not include a path. This preserves the same-origin and DNS-rebinding protections while permitting requests from that one explicitly trusted origin.
 
 **Keyboard shortcuts:** press **`1`–`6`** to jump between tabs (Dashboard → Settings); ignored while you're typing in a field.
 

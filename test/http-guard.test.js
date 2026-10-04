@@ -8,6 +8,7 @@ const assert = require('node:assert');
 const http = require('http');
 
 process.env.LAUNCHPAD_DB = ':memory:';
+process.env.PUBLIC_ORIGIN = 'https://launchpad.example.test:8443';
 const app = require('../server');
 
 let server, port;
@@ -89,6 +90,20 @@ test('same-origin POST passes the guard and reaches the handler', async () => {
     const res = await request({
         method: 'POST', path: '/api/util/open-terminal',
         headers: sameOrigin(),
+        body: { path: 'Z:/definitely/not/a/real/dir/xyz' },
+    });
+    assert.notStrictEqual(res.status, 403);
+    assert.strictEqual(res.status, 400);
+});
+
+test('configured HTTPS reverse-proxy origin passes the guard', async () => {
+    const res = await request({
+        method: 'POST', path: '/api/util/open-terminal',
+        headers: {
+            host: 'launchpad.example.test:8443',
+            origin: 'https://launchpad.example.test:8443',
+            'sec-fetch-site': 'same-origin',
+        },
         body: { path: 'Z:/definitely/not/a/real/dir/xyz' },
     });
     assert.notStrictEqual(res.status, 403);

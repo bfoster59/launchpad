@@ -308,6 +308,21 @@ app.use(express.static('public'));
 //     none (a direct address-bar navigation / non-browser client).
 const GUARD_HOSTS = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`]);
 const GUARD_ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
+
+// Allow one explicitly configured reverse-proxy origin, such as Tailscale Serve.
+if (process.env.PUBLIC_ORIGIN) {
+    const publicUrl = new URL(process.env.PUBLIC_ORIGIN);
+    if (!['http:', 'https:'].includes(publicUrl.protocol) ||
+        publicUrl.pathname !== '/' ||
+        publicUrl.search ||
+        publicUrl.hash ||
+        publicUrl.username ||
+        publicUrl.password) {
+        throw new Error('PUBLIC_ORIGIN must be a plain http(s) origin without a path');
+    }
+    GUARD_HOSTS.add(publicUrl.host);
+    GUARD_ORIGINS.add(publicUrl.origin);
+}
 // Honor a deliberate non-loopback HOST bind (the documented "you accept that risk"
 // opt-in) so the guard never 403s legitimate writes on an intentional deployment.
 // For HOST=0.0.0.0 (bind-all) there is no single host to name, so enumerate this
