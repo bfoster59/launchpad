@@ -81,6 +81,36 @@ values. Use each project's existing edit/link controls and verify the resulting
 path before retiring the old location. Recheck current Git state: earlier clean
 inventories and ahead/behind counts are observations, not a present-day backup.
 
+## Guarded installation on the audited Omarchy host
+
+`scripts/deploy-omarchy.py` is an operator-run helper for the existing
+`matrix-og` / `bfoster` setup. Use a full revision whose CI checks have passed:
+
+```sh
+python scripts/deploy-omarchy.py --apply \
+  --revision FULL_TESTED_COMMIT_SHA \
+  --editor-origin https://your-host.your-tailnet.ts.net
+```
+
+Keep project editing and dashboard actions idle during installation. The helper
+requires the audited clean LaunchPad master revision and the expected work-drive
+UUID. It fetches the feature branch, tests the chosen revision in an isolated
+worktree, then takes private service/configuration and SQLite backups before
+changing the live checkout. Source master and GitHub master are not merged.
+
+The live checkout uses a separate `deployed/central-workspace-*` branch. Existing
+project paths under the old clone root are corrected only after their repository
+identities match the canonical copies. Both `growing` checkouts and its existing
+dashboard path are retained for a separate reconciliation because they contain
+different work. No original repository is deleted or moved.
+
+Only LaunchPad is stopped and started. The helper checks the new browser route,
+project count, and credential presence; it also attempts the existing GitHub
+connection test. If validation fails after a live change, it attempts to restore
+the old branch, database and environment. Backups and the verification worktree
+are retained and their paths are printed. API keys and raw command output are
+not printed or written into the operation log.
+
 ## Recovery
 
 Preserve existing Tailscale Serve routes; never reset all routes as part of a
