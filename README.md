@@ -41,6 +41,8 @@
 - **🌗 Dual theme** — light / dark / auto (follows your OS), with a persistent toggle.
 
 For step-by-step task instructions, see the **[Usage guide / SWI → `docs/USAGE.md`](docs/USAGE.md)**.
+For a shared Linux development host accessed from Windows or macOS, see the
+**[central workspace guide](docs/CENTRAL-WORKSPACE.md)**.
 
 ---
 
@@ -82,6 +84,7 @@ All settings live in the local SQLite DB (Settings page) — no cloud sync.
 | **Theme** | light / dark / auto | header toggle (🖥️/☀️/🌙); persisted in your browser |
 | **`HOST`** | bind address | `127.0.0.1` (loopback). Do **not** set `0.0.0.0` — the app has no auth. |
 | **`PUBLIC_ORIGIN`** | trusted external origin when using a private HTTPS reverse proxy | unset; for example `https://launchpad.example.ts.net:8443` |
+| **`BROWSER_EDITOR_ORIGIN`** | code-server origin used by project workspace actions | unset keeps native terminal mode; for example `https://editor.example.ts.net` |
 
 When using a private reverse proxy such as Tailscale Serve, keep LaunchPad bound to loopback and set `PUBLIC_ORIGIN` to the complete external HTTPS origin, including its port when applicable. Do not include a path. This preserves the same-origin and DNS-rebinding protections while permitting requests from that one explicitly trusted origin.
 

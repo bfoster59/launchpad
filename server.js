@@ -3,6 +3,7 @@ const { Octokit } = require('@octokit/rest');
 const LaunchpadDB = require('./database');
 const Anthropic = require('@anthropic-ai/sdk');
 const aiReview = require('./ai-review');
+const { browserWorkspaceTarget, credentialStatus, launchNativeTerminal } = require('./workspace-access');
 
 const app = express();
 const PORT = 3020;
@@ -1143,7 +1144,7 @@ function getTerminalSpawn(cwd, runCommand) {
     return (stored && platformDefaults[stored]) ? platformDefaults[stored] : platformDefaults[fallbackKey];
 }
 
-app.post('/api/util/open-terminal', (req, res) => {
+app.post('/api/util/open-terminal', async (req, res) => {
     try {
         const { spawn } = require('child_process');
         // Validate the directory (no shell metacharacters, real dir, inside the
@@ -1156,14 +1157,13 @@ app.post('/api/util/open-terminal', (req, res) => {
         }
         // Optional command the terminal runs on open — whitelisted to a fixed set.
         const runCommand = sanitizeTerminalRunCommand(req.body.command);
+        const browserTarget = browserWorkspaceTarget(process.env.BROWSER_EDITOR_ORIGIN, cwd, runCommand);
+        if (browserTarget) return res.json(browserTarget);
         const { file, args } = getTerminalSpawn(cwd, runCommand);
         // No shell: spawn the terminal executable directly with an argument array.
         // cwd is the process working directory (not part of any command string);
         // detached + unref so the terminal window outlives this request.
-        const child = spawn(file, args, { cwd, detached: true, stdio: 'ignore', windowsHide: true });
-        child.on('error', (err) => console.error('open-terminal:', err.message));
-        child.unref();
-        res.json({ success: true, command: `${file} ${args.join(' ')}`, cwd });
+        res.json(await launchNativeTerminal(spawn, file, args, cwd));
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -1198,7 +1198,8 @@ app.get('/api/util/terminal-choices', (req, res) => {
         darwin: ['terminal', 'iterm'],
         linux: ['gnome-terminal', 'konsole', 'xterm']
     };
-    res.json({ platform, choices: choices[platform] || choices.linux });
+    res.json({ platform, choices: choices[platform] || choices.linux,
+        workspace_mode: process.env.BROWSER_EDITOR_ORIGIN ? 'browser' : 'native' });
 });
 
 // Install deps (npm install) for a project's local clone. Blocking — returns
@@ -1845,6 +1846,8 @@ app.get('/api/settings', (req, res) => {
             }
             result[`${s.key}_updated_at`] = s.updated_at;
         });
+        result.github_pat = credentialStatus(db.getSetting('github_pat'), process.env.GITHUB_TOKEN);
+        result.anthropic_api_key = credentialStatus(db.getSetting('anthropic_api_key'), process.env.ANTHROPIC_API_KEY);
         // Always include derived clone base dir so the UI can show the effective value.
         result.clone_base_dir_effective = getCloneBaseDir();
         result.scan_roots_effective = getScanRoots();
@@ -1865,7 +1868,7 @@ app.put('/api/settings/:key', (req, res) => {
         }
         if (value === null || value === '') {
             db.deleteSetting(key);
-            if (key === 'github_pat') octokit = null;
+            if (key === 'github_pat') { octokit = null; initOctokit(); }
         } else {
             db.setSetting(key, value);
             if (key === 'github_pat') octokit = new Octokit({ auth: value });
