@@ -7,9 +7,22 @@ let githubRepos = [];
 let searchResults = [];
 let currentView = 'dashboard';
 let previousView = 'dashboard';
+let workspaceMode = 'native';
+let workspaceModePromise = null;
+
+function loadWorkspaceMode() {
+    if (!workspaceModePromise) {
+        workspaceModePromise = fetch('/api/util/terminal-choices')
+            .then(res => { if (!res.ok) throw new Error('Workspace configuration unavailable'); return res.json(); })
+            .then(data => { workspaceMode = data.workspace_mode === 'browser' ? 'browser' : 'native'; })
+            .catch(() => { workspaceModePromise = null; });
+    }
+    return workspaceModePromise;
+}
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
+    loadWorkspaceMode();
     loadProjects();
     loadStats();
 });
@@ -116,12 +129,16 @@ async function loadSettings() {
         const currentChoice = data.terminal_app || '';
         termSelect.innerHTML = '<option value="">Use platform default</option>' +
             termData.choices.map(c => `<option value="${c}"${c === currentChoice ? ' selected' : ''}>${c}</option>`).join('');
-        document.getElementById('terminalChoicesRow').textContent =
-            `Platform detected: ${termData.platform} — choices: ${termData.choices.join(', ')}`;
+        termSelect.disabled = termData.workspace_mode === 'browser';
+        document.getElementById('terminalChoicesRow').textContent = termData.workspace_mode === 'browser'
+            ? 'Projects open in browser VS Code. Native terminal preferences apply when browser mode is disabled.'
+            : `Platform detected: ${termData.platform} — choices: ${termData.choices.join(', ')}`;
 
         const patEl = document.getElementById('patStatus');
         if (data.github_pat && data.github_pat.set) {
-            patEl.textContent = `Token is set. Enter a new value and Save to replace, or Clear to remove.`;
+            patEl.textContent = data.github_pat.source === 'environment'
+                ? 'GitHub access is configured on the server. No browser token is needed.'
+                : 'Token is set. Enter a new value and Save to replace, or Clear to remove.';
             patEl.style.color = '#22c55e';
         } else {
             patEl.textContent = 'No token set — private-repo features and Bulk Import are disabled.';
@@ -625,6 +642,7 @@ function _ensureDetailDom() {
 
 async function showProject(id) {
     try {
+        await loadWorkspaceMode();
         _ensureDetailDom();
         const response = await fetch(`/api/projects/${id}`);
         currentProject = await response.json();
@@ -780,7 +798,7 @@ async function showProject(id) {
                     <div class="info-value" style="font-family: monospace; font-size: 0.85rem;">
                         <span style="color: var(--accent); cursor: pointer; text-decoration: underline;" onclick="copyToClipboard(${attrStr(currentProject.local_path)}, this)" title="Click to copy path">${escapeHtml(currentProject.local_path)}</span>
                         <button class="btn btn-sm" style="margin-left: 8px;" onclick="copyTerminalCommand(${attrStr(currentProject.local_path)})" title="Copy cd command">📋 Copy cd command</button>
-                        <button class="btn btn-sm" style="margin-left: 8px;" onclick="openInTerminal(${attrStr(currentProject.local_path)})" title="Open a new terminal in this folder">💻 Open Terminal</button>
+                        <button class="btn btn-sm" style="margin-left: 8px;" onclick="openInTerminal(${attrStr(currentProject.local_path)})" title="${workspaceMode === 'browser' ? 'Open this project in browser VS Code' : 'Open a new server terminal in this folder'}">💻 ${workspaceMode === 'browser' ? 'Open in VS Code' : 'Open Terminal'}</button>
                         <button class="btn btn-sm" style="margin-left: 8px;" onclick="openInFolder(${attrStr(currentProject.local_path)})" title="Open in Explorer">📂 Open Folder</button>
                     </div>
                 </div>
@@ -1715,7 +1733,7 @@ async function showBulkImport() {
         const input = document.getElementById('githubToken');
         if (s.github_pat && s.github_pat.set && !input.value) {
             input.value = '__USE_STORED__';
-            input.placeholder = `Using stored token — edit to override`;
+            input.placeholder = `Using server credential — edit to override`;
             input.dataset.usesStored = 'true';
         }
     } catch (e) { /* non-fatal */ }
@@ -2897,42 +2915,54 @@ async function loadCommits() {
     }
 }
 
-async function openInTerminal(path) {
+// Reserve the browser tab during the click, before the API request finishes.
+async function openProjectWorkspace(path, command) {
+    let projectWindow = null;
     try {
+        if (workspaceMode === 'browser') {
+            projectWindow = window.open('about:blank', '_blank');
+            if (projectWindow) projectWindow.opener = null;
+        }
         const res = await fetch('/api/util/open-terminal', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path })
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path, ...(command ? { command } : {}) })
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to open terminal');
-        if (typeof showToast === 'function') showToast(`Opened terminal in ${path}`);
+        if (!res.ok) throw new Error(data.error || 'Failed to open workspace');
+        if (data.mode === 'browser') {
+            const target = new URL(data.url);
+            if (!['http:', 'https:'].includes(target.protocol)) throw new Error('Invalid browser editor URL');
+            if (projectWindow && !projectWindow.closed) {
+                projectWindow.location.replace(target.href);
+            } else {
+                if (command) alert(`In VS Code, choose Terminal → New Terminal and run ${command}.`);
+                window.location.assign(target.href);
+            }
+            showToast(command
+                ? `VS Code opened. Choose Terminal → New Terminal, then run ${command}.`
+                : 'VS Code opened. Choose Terminal → New Terminal to start working.', 'info', 0);
+            return;
+        }
+        if (projectWindow && !projectWindow.closed) projectWindow.close();
+        showToast(`Started native terminal launcher in ${path}`);
     } catch (e) {
+        if (projectWindow && !projectWindow.closed) projectWindow.close();
         showToast(`Error: ${e.message}`, 'error');
     }
 }
 
-// Opens the user's preferred terminal in the project's local_path and auto-runs
-// `claude` so Claude Code starts with the right cwd. If no local clone yet,
-// alerts the user to clone first.
+function openInTerminal(path) {
+    return openProjectWorkspace(path);
+}
+
+// Browser mode opens the project and gives a manual Claude startup instruction.
 async function openInClaudeCode() {
     if (!currentProject) return;
     if (!currentProject.local_path) {
         alert('Clone the repo first — Claude Code needs a working directory.');
         return;
     }
-    try {
-        const res = await fetch('/api/util/open-terminal', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: currentProject.local_path, command: 'claude' })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to open Claude Code');
-        showToast(`🤖 Claude Code opening in ${currentProject.local_path}`);
-    } catch (e) {
-        showToast(`Error: ${e.message}`, 'error');
-    }
+    return openProjectWorkspace(currentProject.local_path, 'claude');
 }
 
 function copyPromptToClipboard() {
